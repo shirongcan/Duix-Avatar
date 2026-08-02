@@ -76,6 +76,96 @@ export function extractAudio(videoPath, audioPath) {
   })
 }
 
+/**
+ * 在音频开头补静音，让数字人出场后稍作停顿再开口。
+ */
+export function prependAudioSilence(inputPath, outputPath, durationSeconds = 1.5) {
+  const delayMilliseconds = Math.max(0, Math.round(Number(durationSeconds) * 1000))
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioFilters(`adelay=${delayMilliseconds}:all=1`)
+      .audioCodec('pcm_s16le')
+      .audioFrequency(44100)
+      .save(outputPath)
+      .on('end', () => {
+        log.info('audio lead-in silence added:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('adding audio lead-in silence failed:', err.message)
+        reject(err)
+      })
+  })
+}
+
+/**
+ * 转为 FunASR 时间轴识别所需的 16 kHz 单声道裸 PCM。
+ */
+export function convertAudioToAsrPcm(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioCodec('pcm_s16le')
+      .format('s16le')
+      .save(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (error) => reject(error))
+  })
+}
+
+/**
+ * 检测音频中的真实说话区间，用于让字幕切换贴近语音停顿。
+ */
+export async function detectSpeechIntervals(inputPath) {
+  const duration = Number(await getVideoDuration(inputPath))
+  const silenceIntervals = []
+  let silenceStart = null
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioFilters('silencedetect=noise=-40dB:d=0.15')
+      .format('null')
+      .output('-')
+      .on('stderr', (line) => {
+        const startMatch = /silence_start:\s*([\d.]+)/.exec(line)
+        if (startMatch) silenceStart = Number(startMatch[1])
+
+        const endMatch = /silence_end:\s*([\d.]+)/.exec(line)
+        if (endMatch && silenceStart !== null) {
+          silenceIntervals.push({ start: silenceStart, end: Number(endMatch[1]) })
+          silenceStart = null
+        }
+      })
+      .on('end', resolve)
+      .on('error', reject)
+      .run()
+  })
+
+  if (silenceStart !== null) {
+    silenceIntervals.push({ start: silenceStart, end: duration })
+  }
+
+  const speechIntervals = []
+  let cursor = 0
+  silenceIntervals.forEach((silence) => {
+    const silenceStartTime = Math.min(duration, Math.max(cursor, silence.start))
+    if (silenceStartTime - cursor >= 0.08) {
+      speechIntervals.push({ start: cursor, end: silenceStartTime })
+    }
+    cursor = Math.min(duration, Math.max(cursor, silence.end))
+  })
+  if (duration - cursor >= 0.08) {
+    speechIntervals.push({ start: cursor, end: duration })
+  }
+
+  log.info('speech intervals detected:', speechIntervals.length)
+  return speechIntervals
+}
+
 export async function toH264(videoPath, outputPath) {
   // const hasNvidia = await detectNvidia()
   return new Promise((resolve, reject) => {
@@ -95,22 +185,22 @@ export async function toH264(videoPath, outputPath) {
 
 function detectNvidia() {
   return new Promise((resolve) => {
-    const exec = require('child_process').exec;
+    const exec = require('child_process').exec
     exec('nvidia-smi', (error, stdout, stderr) => {
       if (error || stderr) {
-        resolve(false);
+        resolve(false)
       } else {
-        resolve(true);
+        resolve(true)
       }
-    });
-  });
+    })
+  })
 }
 
 export function getVideoDuration(videoPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath).ffprobe((err, data) => {
       if (err) {
-        log.error("🚀 ~ ffmpeg ~ err:", err)
+        log.error('🚀 ~ ffmpeg ~ err:', err)
         reject(err)
       } else if (data && data.streams && data.streams.length > 0) {
         resolve(data.streams[0].duration) // 单位秒
@@ -173,10 +263,7 @@ export function applyBeautyFilter(inputPath, outputPath, beauty = {}) {
 }
 
 export function burnAssSubtitles(inputPath, outputPath, assPath) {
-  const escapedAssPath = assPath
-    .replaceAll('\\', '/')
-    .replaceAll(':', '\\:')
-    .replaceAll("'", "\\'")
+  const escapedAssPath = assPath.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'")
 
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)

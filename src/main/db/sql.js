@@ -77,5 +77,11 @@ export default [
         script: `alter table video
                     add subtitle_style text;
                 `
+    },
+    {
+        version: 6,
+        script: `alter table video
+                    add subtitle_timing text;
+                `
     }
 ]
