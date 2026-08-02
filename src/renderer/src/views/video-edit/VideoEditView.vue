@@ -12,7 +12,13 @@
               <Select class="content-left" v-model="state.select" @query="action.queryModelList" />
             </t-col>
             <t-col :flex="4.5">
-              <Preview class="content-center" :model="state.select.model" :beauty="state.select.beauty" />
+              <Preview
+                class="content-center"
+                :model="state.select.model"
+                :beauty="state.select.beauty"
+                :subtitle="state.select.subtitle"
+                :text="state.select.text"
+              />
             </t-col>
             <t-col :flex="5.0">
               <Edit class="content-right" v-model="state.select" />
@@ -22,14 +28,17 @@
       </t-layout>
     </t-loading>
   </t-layout>
-  <ModalFinished ref="modalFinished" :right-btn-text="$t('common.selectView.modalFinishedObj.rightBtnText')">
+  <ModalFinished
+    ref="modalFinished"
+    :right-btn-text="$t('common.selectView.modalFinishedObj.rightBtnText')"
+  >
     {{ $t('common.selectView.modalFinishedObj.text1')
     }}<span style="color: #434af9"> {{ $t('common.selectView.modalFinishedObj.text2') }}</span>
     {{ $t('common.selectView.modalFinishedObj.text3') }}
   </ModalFinished>
 </template>
 <script setup>
-import { ref, reactive, watch } from "vue";
+import { ref, reactive, watch } from 'vue'
 import Header from './header/HeaderView.vue'
 import Select from './select/SelectView.vue'
 import Preview from './preview/PreviewView.vue'
@@ -63,6 +72,15 @@ const state = reactive({
       smoothing: 35,
       brighten: 15,
       rosy: 8
+    },
+    subtitle: {
+      enabled: true,
+      fontSize: 42,
+      textColor: '#FFFFFF',
+      outlineColor: '#000000',
+      outlineWidth: 3,
+      position: 'bottom',
+      verticalOffset: 0
     }
   }
 })
@@ -149,11 +167,22 @@ const action = {
       state.select.model.id = videoDetail.model_id
       if (videoDetail.beauty) {
         try {
-          state.select.beauty = typeof videoDetail.beauty === 'string'
-            ? JSON.parse(videoDetail.beauty)
-            : videoDetail.beauty
+          state.select.beauty =
+            typeof videoDetail.beauty === 'string'
+              ? JSON.parse(videoDetail.beauty)
+              : videoDetail.beauty
         } catch (error) {
           console.warn('美颜参数读取失败，将使用默认值', error)
+        }
+      }
+      if (videoDetail.subtitle_style) {
+        try {
+          state.select.subtitle =
+            typeof videoDetail.subtitle_style === 'string'
+              ? JSON.parse(videoDetail.subtitle_style)
+              : videoDetail.subtitle_style
+        } catch (error) {
+          console.warn('字幕样式读取失败，将使用默认值', error)
         }
       }
     }
@@ -217,6 +246,15 @@ const action = {
         brighten: Number(select.beauty.brighten),
         rosy: Number(select.beauty.rosy)
       },
+      subtitle_style: {
+        enabled: Boolean(select.subtitle.enabled),
+        fontSize: Number(select.subtitle.fontSize),
+        textColor: String(select.subtitle.textColor),
+        outlineColor: String(select.subtitle.outlineColor),
+        outlineWidth: Number(select.subtitle.outlineWidth),
+        position: String(select.subtitle.position),
+        verticalOffset: Number(select.subtitle.verticalOffset || 0)
+      },
       ...sumitAudio
     })
     return video.id || saveId
@@ -242,9 +280,11 @@ action.init()
   }
 
   :deep(.t-loading__gradient-conic) {
-    background: conic-gradient(from 90deg at 50% 50%,
-        rgba(67, 74, 249, 0) 0deg,
-        rgb(255, 255, 255) 360deg) !important;
+    background: conic-gradient(
+      from 90deg at 50% 50%,
+      rgba(67, 74, 249, 0) 0deg,
+      rgb(255, 255, 255) 360deg
+    ) !important;
   }
 
   &-header {
@@ -266,7 +306,7 @@ action.init()
     height: 100%;
     align-items: unset;
 
-    &>* {
+    & > * {
       height: 100%;
     }
   }

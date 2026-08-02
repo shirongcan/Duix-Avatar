@@ -16,8 +16,8 @@ import {
 import { makeAudio4Video, copyAudio4Video } from './voice.js'
 import { makeVideo as makeVideoApi,getVideoStatus } from '../api/f2f.js'
 import log from '../logger.js'
-import { applyBeautyFilter, getVideoDuration } from '../util/ffmpeg.js'
-import { createSrt } from '../util/subtitle.js'
+import { applyBeautyFilter, burnAssSubtitles, getVideoDuration } from '../util/ffmpeg.js'
+import { createAss, createSrt } from '../util/subtitle.js'
 
 const MODEL_NAME = 'video'
 
@@ -61,16 +61,27 @@ function countVideo(name = '') {
   return count(name)
 }
 
-function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, beauty }) {
+function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, beauty, subtitle_style }) {
   const video = selectVideoByID(id)
   if(audio_path){
     audio_path = copyAudio4Video(audio_path)
   }
 
   if (video) {
-    return update({ id, model_id, name, text_content, voice_id, audio_path, beauty })
+    return update({ id, model_id, name, text_content, voice_id, audio_path, beauty, subtitle_style })
   }
-  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path, beauty })
+  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path, beauty, subtitle_style })
+}
+
+function parseSubtitleStyle(value) {
+  if (!value) return null
+  try {
+    const style = typeof value === 'string' ? JSON.parse(value) : value
+    return style?.enabled ? style : null
+  } catch (error) {
+    log.warn('invalid subtitle style:', error.message)
+    return null
+  }
 }
 
 function parseBeauty(value) {
@@ -218,6 +229,35 @@ export async function loopPending() {
           }
         }
         duration = await getVideoDuration(resultPath)
+        const subtitleStyle = parseSubtitleStyle(video.subtitle_style)
+        if (subtitleStyle && video.text_content?.trim()) {
+          const parsedPath = path.parse(resultPath)
+          const subtitleOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitled.mp4`)
+          const assPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitle.ass`)
+          if (!fs.existsSync(subtitleOutputPath)) {
+            updateStatus(video.id, 'pending', '正在烧录字幕', 99)
+            try {
+              fs.writeFileSync(assPath, `\ufeff${createAss(video.text_content, duration, subtitleStyle)}`, 'utf8')
+              await burnAssSubtitles(resultPath, subtitleOutputPath, assPath)
+            } catch (error) {
+              try {
+                fs.rmSync(subtitleOutputPath, { force: true })
+              } catch (cleanupError) {
+                log.warn('Unable to remove failed subtitle output:', cleanupError.message)
+              }
+              updateStatus(video.id, 'failed', `字幕烧录失败：${error.message}`)
+              setTimeout(() => loopPending(), 2000)
+              return video
+            } finally {
+              try {
+                fs.rmSync(assPath, { force: true })
+              } catch (cleanupError) {
+                log.warn('Unable to remove temporary subtitle file:', cleanupError.message)
+              }
+            }
+          }
+          resultPath = subtitleOutputPath
+        }
         statusRes.data.result = path.relative(assetPath.model, resultPath)
       }
 

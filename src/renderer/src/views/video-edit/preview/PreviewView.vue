@@ -39,6 +39,13 @@
           class="beauty-tint"
           :style="getter.tintStyle.value"
         ></span>
+        <span
+          v-if="subtitle.enabled"
+          class="subtitle-preview"
+          :style="getter.subtitlePreviewStyle.value"
+        >
+          {{ getter.subtitlePreviewText.value || $t('common.editView.subtitleSample') }}
+        </span>
       </div>
       <template v-if="beauty.enabled">
         <button
@@ -75,6 +82,14 @@ const props = defineProps({
   beauty: {
     type: Object,
     default: () => ({ enabled: false })
+  },
+  subtitle: {
+    type: Object,
+    default: () => ({ enabled: false })
+  },
+  text: {
+    type: String,
+    default: ''
   }
 })
 
@@ -98,6 +113,29 @@ const getter = {
   tintStyle: computed(() => {
     const rosy = Number(props.beauty.rosy || 0)
     return { opacity: rosy * 0.0008 }
+  }),
+  subtitlePreviewText: computed(() => {
+    const normalized = props.text.replace(/\s+/g, ' ').trim()
+    const firstSentence = normalized.match(/^.*?[。！？!?；;]/)?.[0] || normalized
+    const characters = Array.from(firstSentence)
+    return characters.length > 24 ? `${characters.slice(0, 24).join('')}…` : firstSentence
+  }),
+  subtitlePreviewStyle: computed(() => {
+    const fontSize = Math.min(72, Math.max(24, Number(props.subtitle.fontSize) || 42))
+    const outlineWidth = Math.min(8, Math.max(0, Number(props.subtitle.outlineWidth) || 3))
+    const offset = Math.min(160, Math.max(-160, Number(props.subtitle.verticalOffset) || 0)) * 0.18
+    const positionStyles = {
+      top: { top: `calc(7% + ${offset}px)` },
+      middle: { top: '50%', transform: `translateY(calc(-50% + ${offset}px))` },
+      bottom: { bottom: `calc(10% - ${offset}px)` }
+    }
+    return {
+      color: props.subtitle.textColor || '#FFFFFF',
+      fontSize: `${12 + ((fontSize - 24) / 48) * 20}px`,
+      WebkitTextStroke: `${outlineWidth * 0.32}px ${props.subtitle.outlineColor || '#000000'}`,
+      textShadow: `0 1px ${Math.max(1, outlineWidth * 0.5)}px ${props.subtitle.outlineColor || '#000000'}`,
+      ...(positionStyles[props.subtitle.position] || positionStyles.bottom)
+    }
   })
 }
 </script>
@@ -152,6 +190,19 @@ const getter = {
       inset: 0;
       background: #ff8193;
       mix-blend-mode: soft-light;
+      pointer-events: none;
+    }
+
+    .subtitle-preview {
+      position: absolute;
+      left: 6%;
+      right: 6%;
+      z-index: 2;
+      font-family: 'Microsoft YaHei', sans-serif;
+      font-weight: 700;
+      line-height: 1.35;
+      text-align: center;
+      word-break: break-word;
       pointer-events: none;
     }
   }

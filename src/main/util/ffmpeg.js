@@ -171,3 +171,27 @@ export function applyBeautyFilter(inputPath, outputPath, beauty = {}) {
       })
   })
 }
+
+export function burnAssSubtitles(inputPath, outputPath, assPath) {
+  const escapedAssPath = assPath
+    .replaceAll('\\', '/')
+    .replaceAll(':', '\\:')
+    .replaceAll("'", "\\'")
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoFilters(`ass='${escapedAssPath}'`)
+      .videoCodec('libx264')
+      .audioCodec('copy')
+      .outputOptions(['-preset medium', '-crf 18', '-pix_fmt yuv420p', '-movflags +faststart'])
+      .save(outputPath)
+      .on('end', () => {
+        log.info('subtitle burn-in done:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('subtitle burn-in failed:', err.message)
+        reject(err)
+      })
+  })
+}

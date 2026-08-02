@@ -71,5 +71,11 @@ export default [
         script: `alter table video
                     add beauty text;
                 `
+    },
+    {
+        version: 5,
+        script: `alter table video
+                    add subtitle_style text;
+                `
     }
 ]

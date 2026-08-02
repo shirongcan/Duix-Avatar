@@ -6,6 +6,7 @@
       <t-radio-button :value="EDIT_TABS.TEXT">{{ $t('common.editView.text') }}</t-radio-button>
       <t-radio-button :value="EDIT_TABS.AUDIO">{{ $t('common.editView.audio') }}</t-radio-button>
       <t-radio-button :value="EDIT_TABS.BEAUTY">{{ $t('common.editView.beauty') }}</t-radio-button>
+      <t-radio-button :value="EDIT_TABS.SUBTITLE">{{ $t('common.editView.subtitle') }}</t-radio-button>
     </t-radio-group>
     <div class="edit-body edit-body-text" v-show="getter.isTextTab.value">
       <EditText v-model="select" class="content" :listener="listener" />
@@ -16,6 +17,9 @@
     <div class="edit-body" v-show="getter.isBeautyTab.value">
       <BeautyPanel v-model="select.beauty" class="content" />
     </div>
+    <div class="edit-body" v-show="getter.isSubtitleTab.value">
+      <SubtitlePanel v-model="select.subtitle" class="content" />
+    </div>
     <EditListener ref="listener" />
   </div>
 </template>
@@ -25,6 +29,7 @@ import EditListener from './EditListener.vue'
 import EditUpload from './EditUpload.vue';
 import EditText from './EditText.vue';
 import BeautyPanel from './BeautyPanel.vue'
+import SubtitlePanel from './SubtitlePanel.vue'
 
 const select = defineModel({})
 
@@ -32,7 +37,8 @@ const select = defineModel({})
 const EDIT_TABS = {
   TEXT: '1',
   AUDIO: '2',
-  BEAUTY: '3'
+  BEAUTY: '3',
+  SUBTITLE: '4'
 }
 
 const state = reactive({
@@ -51,6 +57,9 @@ const getter = {
   }),
   isBeautyTab: computed(() => {
     return state.activeTab === EDIT_TABS.BEAUTY
+  }),
+  isSubtitleTab: computed(() => {
+    return state.activeTab === EDIT_TABS.SUBTITLE
   })
 }
 
