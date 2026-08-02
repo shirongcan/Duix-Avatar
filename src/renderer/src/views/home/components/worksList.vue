@@ -77,6 +77,20 @@
                 <img src="../../../assets/images/home/icon-down.svg" />
                 <span>{{ $t('common.videoList.downloadTitle') }}</span>
               </div>
+              <div
+                v-if="item.status === 'success'"
+                class="background-button"
+                @click="openBackgroundDialog(item)"
+              >
+                <span>{{ $t('common.videoList.replaceBackgroundTitle') }}</span>
+              </div>
+              <div
+                v-if="item.status === 'success' && item.text_content"
+                class="subtitle-button"
+                @click="downloadSubtitle(item)"
+              >
+                <span>{{ $t('common.videoList.exportSubtitleTitle') }}</span>
+              </div>
               <div v-if="item.status === 'failed'" class="detection-failed-text">
                 {{ $t('common.videoList.makeFailedText') }}
                 <img src="../../../assets/images/home/icon-delete.svg" />
@@ -152,12 +166,31 @@
       @cancel="cancelFun"
     />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
+    <t-dialog
+      v-model:visible="state.showBackgroundDialog"
+      :header="$t('common.videoList.replaceBackgroundDialogTitle')"
+      :confirm-btn="$t('common.videoList.startReplace')"
+      :confirm-loading="state.backgroundProcessing"
+      :close-on-overlay-click="!state.backgroundProcessing"
+      :on-confirm="replaceBackground"
+    >
+      <div class="background-dialog-content">
+        <t-button theme="default" variant="outline" :disabled="state.backgroundProcessing" @click="selectBackground">
+          {{ $t('common.videoList.selectBackground') }}
+        </t-button>
+        <div v-if="state.backgroundPath" class="background-path">{{ state.backgroundPath }}</div>
+        <div class="background-tip">{{ $t('common.videoList.backgroundTip') }}</div>
+        <div v-if="state.backgroundProcessing" class="background-processing">
+          {{ $t('common.videoList.processingBackground') }}
+        </div>
+      </div>
+    </t-dialog>
   </div>
 </template>
 <script setup>
 import { reactive, onMounted, onBeforeUnmount, ref } from 'vue'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
-import { videoPage, exportVideo, removeVideo } from '@renderer/api/index.js'
+import { videoPage, exportVideo, exportSubtitle, removeVideo, replaceVideoBackground } from '@renderer/api/index.js'
 import { formatDate, millisecondsToTime } from '@renderer/utils/index.js'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
 import { Client } from '@renderer/client'
@@ -193,7 +226,11 @@ const state = reactive({
   url: `file:///B:/dd.mov`,
   formData: {
     name: ''
-  }
+  },
+  showBackgroundDialog: false,
+  backgroundProcessing: false,
+  backgroundPath: '',
+  backgroundVideo: null
 })
 onMounted(() => {
   videoPageAJax()
@@ -286,6 +323,55 @@ const downloadVideo = async (video) => {
     console.log(error)
   }
 }
+
+const downloadSubtitle = async (video) => {
+  try {
+    const savePath = await Client.file.saveFile(`${video.name}.srt`)
+    if (!savePath) return
+    await exportSubtitle(video.id, savePath)
+    MessagePlugin.success(t('common.videoList.exportSubtitleSuccess'))
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.exportSubtitleFailed')}: ${error?.message || error}`)
+  }
+}
+
+const openBackgroundDialog = (video) => {
+  state.backgroundVideo = video
+  state.backgroundPath = ''
+  state.showBackgroundDialog = true
+}
+
+const selectBackground = async () => {
+  state.backgroundPath = await Client.file.selectFile({
+    name: 'Images or Videos',
+    extensions: ['jpg', 'jpeg', 'png', 'webp', 'mp4', 'mov']
+  }) || ''
+}
+
+const replaceBackground = async () => {
+  if (!state.backgroundPath || !state.backgroundVideo) {
+    MessagePlugin.warning(t('common.videoList.selectBackground'))
+    return false
+  }
+
+  const saveName = `${state.backgroundVideo.name}-新背景.mp4`
+  const outputPath = await Client.file.saveFile(saveName)
+  if (!outputPath) return false
+
+  state.backgroundProcessing = true
+  try {
+    await replaceVideoBackground(state.backgroundVideo.id, state.backgroundPath, outputPath)
+    MessagePlugin.success(t('common.videoList.replaceBackgroundSuccess'))
+    state.showBackgroundDialog = false
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.replaceBackgroundFailed')}: ${error?.message || error}`)
+  } finally {
+    state.backgroundProcessing = false
+  }
+  return false
+}
 </script>
 <style lang="less" scoped>
 .works-content-box {
@@ -368,6 +454,34 @@ const downloadVideo = async (video) => {
               img {
                 margin-right: 4px;
               }
+            }
+
+            .background-button {
+              width: 90px;
+              height: 30px;
+              margin-top: 8px;
+              cursor: pointer;
+              border: 1px solid rgba(255, 255, 255, 0.6);
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 12px;
+              color: #fff;
+            }
+
+            .subtitle-button {
+              width: 90px;
+              height: 30px;
+              margin-top: 8px;
+              cursor: pointer;
+              border: 1px solid rgba(255, 255, 255, 0.6);
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 12px;
+              color: #fff;
             }
 
             .detection-failed-text {
@@ -626,6 +740,29 @@ const downloadVideo = async (video) => {
       display: flex;
       height: 46px;
     }
+  }
+}
+
+.background-dialog-content {
+  .background-path {
+    margin-top: 12px;
+    padding: 8px;
+    word-break: break-all;
+    border-radius: 4px;
+    background: #f4f5f7;
+    color: #555;
+    font-size: 12px;
+  }
+
+  .background-tip,
+  .background-processing {
+    margin-top: 12px;
+    color: #777;
+    font-size: 12px;
+  }
+
+  .background-processing {
+    color: #434af9;
   }
 }
 </style>

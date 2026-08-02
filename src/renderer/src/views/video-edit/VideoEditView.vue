@@ -12,7 +12,7 @@
               <Select class="content-left" v-model="state.select" @query="action.queryModelList" />
             </t-col>
             <t-col :flex="4.5">
-              <Preview class="content-center" :model="state.select.model" />
+              <Preview class="content-center" :model="state.select.model" :beauty="state.select.beauty" />
             </t-col>
             <t-col :flex="5.0">
               <Edit class="content-right" v-model="state.select" />
@@ -58,6 +58,12 @@ const state = reactive({
     text: '',
     modelList: [],
     uploaded: null,
+    beauty: {
+      enabled: true,
+      smoothing: 35,
+      brighten: 15,
+      rosy: 8
+    }
   }
 })
 
@@ -141,6 +147,15 @@ const action = {
       state.video.name = videoDetail.name
       state.select.text = videoDetail.text_content
       state.select.model.id = videoDetail.model_id
+      if (videoDetail.beauty) {
+        try {
+          state.select.beauty = typeof videoDetail.beauty === 'string'
+            ? JSON.parse(videoDetail.beauty)
+            : videoDetail.beauty
+        } catch (error) {
+          console.warn('美颜参数读取失败，将使用默认值', error)
+        }
+      }
     }
   },
   async initModelDetail(modelId) {
@@ -196,6 +211,12 @@ const action = {
       model_id: select.model.id,
       name: video.name,
       text_content: select.text,
+      beauty: {
+        enabled: Boolean(select.beauty.enabled),
+        smoothing: Number(select.beauty.smoothing),
+        brighten: Number(select.beauty.brighten),
+        rosy: Number(select.beauty.rosy)
+      },
       ...sumitAudio
     })
     return video.id || saveId

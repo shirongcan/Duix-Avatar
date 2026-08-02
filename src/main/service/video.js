@@ -16,7 +16,8 @@ import {
 import { makeAudio4Video, copyAudio4Video } from './voice.js'
 import { makeVideo as makeVideoApi,getVideoStatus } from '../api/f2f.js'
 import log from '../logger.js'
-import { getVideoDuration } from '../util/ffmpeg.js'
+import { applyBeautyFilter, getVideoDuration } from '../util/ffmpeg.js'
+import { createSrt } from '../util/subtitle.js'
 
 const MODEL_NAME = 'video'
 
@@ -60,16 +61,27 @@ function countVideo(name = '') {
   return count(name)
 }
 
-function saveVideo({ id, model_id, name, text_content, voice_id, audio_path }) {
+function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, beauty }) {
   const video = selectVideoByID(id)
   if(audio_path){
     audio_path = copyAudio4Video(audio_path)
   }
 
   if (video) {
-    return update({ id, model_id, name, text_content, voice_id, audio_path })
+    return update({ id, model_id, name, text_content, voice_id, audio_path, beauty })
   }
-  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path })
+  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path, beauty })
+}
+
+function parseBeauty(value) {
+  if (!value) return null
+  try {
+    const beauty = typeof value === 'string' ? JSON.parse(value) : value
+    return beauty?.enabled ? beauty : null
+  } catch (error) {
+    log.warn('invalid beauty settings:', error.message)
+    return null
+  }
 }
 
 /**
@@ -188,8 +200,25 @@ export async function loopPending() {
       if(process.env.NODE_ENV === 'development'){
         duration = 88
       }else{
-        const resultPath = path.join(assetPath.model, statusRes.data.result)
+        const sourcePath = path.join(assetPath.model, statusRes.data.result)
+        let resultPath = sourcePath
+        const beauty = parseBeauty(video.beauty)
+        if (beauty) {
+          const parsedPath = path.parse(sourcePath)
+          resultPath = path.join(parsedPath.dir, `${parsedPath.name}.beauty.mp4`)
+          if (!fs.existsSync(resultPath)) {
+            updateStatus(video.id, 'pending', '正在进行美颜处理', 99)
+            try {
+              await applyBeautyFilter(sourcePath, resultPath, beauty)
+            } catch (error) {
+              updateStatus(video.id, 'failed', `美颜处理失败：${error.message}`)
+              setTimeout(() => loopPending(), 2000)
+              return video
+            }
+          }
+        }
         duration = await getVideoDuration(resultPath)
+        statusRes.data.result = path.relative(assetPath.model, resultPath)
       }
 
       update({
@@ -250,6 +279,16 @@ function exportVideo(videoId, outputPath) {
   fs.copyFileSync(filePath, outputPath)
 }
 
+function exportSubtitle(videoId, outputPath) {
+  const video = selectVideoByID(videoId)
+  if (!video) {
+    throw new Error('找不到指定的视频作品')
+  }
+  const srt = createSrt(video.text_content, video.duration)
+  fs.writeFileSync(outputPath, `\ufeff${srt}`, 'utf8')
+  return outputPath
+}
+
 /**
  * 调用face2face生成视频
  * @param {string} audioPath
@@ -295,6 +334,9 @@ export function init() {
   })
   ipcMain.handle(MODEL_NAME + '/export', (event, ...args) => {
     return exportVideo(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/export-subtitle', (event, ...args) => {
+    return exportSubtitle(...args)
   })
   ipcMain.handle(MODEL_NAME + '/remove', (event, ...args) => {
     return removeVideo(...args)

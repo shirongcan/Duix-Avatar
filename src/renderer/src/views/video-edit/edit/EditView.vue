@@ -5,12 +5,16 @@
       @change="action.onChangeTab">
       <t-radio-button :value="EDIT_TABS.TEXT">{{ $t('common.editView.text') }}</t-radio-button>
       <t-radio-button :value="EDIT_TABS.AUDIO">{{ $t('common.editView.audio') }}</t-radio-button>
+      <t-radio-button :value="EDIT_TABS.BEAUTY">{{ $t('common.editView.beauty') }}</t-radio-button>
     </t-radio-group>
     <div class="edit-body edit-body-text" v-show="getter.isTextTab.value">
       <EditText v-model="select" class="content" :listener="listener" />
     </div>
     <div class="edit-body" v-show="getter.isAudioTab.value">
       <EditUpload v-model="select" class="content" :listener="listener" />
+    </div>
+    <div class="edit-body" v-show="getter.isBeautyTab.value">
+      <BeautyPanel v-model="select.beauty" class="content" />
     </div>
     <EditListener ref="listener" />
   </div>
@@ -20,13 +24,15 @@ import { computed, reactive, ref } from 'vue'
 import EditListener from './EditListener.vue'
 import EditUpload from './EditUpload.vue';
 import EditText from './EditText.vue';
+import BeautyPanel from './BeautyPanel.vue'
 
 const select = defineModel({})
 
 
 const EDIT_TABS = {
   TEXT: '1',
-  AUDIO: '2'
+  AUDIO: '2',
+  BEAUTY: '3'
 }
 
 const state = reactive({
@@ -42,6 +48,9 @@ const getter = {
   }),
   isAudioTab: computed(() => {
     return state.activeTab === EDIT_TABS.AUDIO
+  }),
+  isBeautyTab: computed(() => {
+    return state.activeTab === EDIT_TABS.BEAUTY
   })
 }
 
@@ -78,7 +87,7 @@ const action = {
     --td-bg-color-container-select: #2B3B52;
 
     :deep(.t-radio-button) {
-      width: 50%;
+      flex: 1;
       border-radius: 4px;
     }
 
