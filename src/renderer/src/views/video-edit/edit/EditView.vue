@@ -17,7 +17,7 @@
     <div class="edit-body" v-show="getter.isBeautyTab.value">
       <BeautyPanel v-model="select.beauty" class="content" />
     </div>
-    <div class="edit-body" v-show="getter.isSubtitleTab.value">
+    <div class="edit-body edit-body-subtitle" v-show="getter.isSubtitleTab.value">
       <SubtitlePanel v-model="select.subtitle" class="content" />
     </div>
     <EditListener ref="listener" />
@@ -136,6 +136,18 @@ const action = {
 
       .content {
         background-color: #161718;
+      }
+    }
+
+    &-subtitle {
+      height: 0;
+      min-height: 0;
+      overflow: hidden;
+
+      .content {
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
       }
     }
 
