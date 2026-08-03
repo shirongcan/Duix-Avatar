@@ -33,7 +33,12 @@
                 {{ item.duration + '' ? millisecondsToTime(item.duration * 1000) : '00:00' }}
               </div>
               <div v-if="item.status === 'success'" class="works-video">
-                 <video :src="localUrl.addFileProtocol(item.file_path)"></video>
+                <img
+                  v-if="item.cover_style?.enabled && item.cover_style?.imagePath"
+                  class="works-cover"
+                  :src="localUrl.addFileProtocol(item.cover_style.imagePath)"
+                />
+                <video v-else :src="localUrl.addFileProtocol(item.file_path)"></video>
               </div>
               <!--  <video class="works-video" src="../../../assets/images/home/aa.mp4"></video> -->
               <img
@@ -76,6 +81,20 @@
               >
                 <img src="../../../assets/images/home/icon-down.svg" />
                 <span>{{ $t('common.videoList.downloadTitle') }}</span>
+              </div>
+              <div
+                v-if="item.status === 'success'"
+                class="background-button"
+                @click="openBackgroundDialog(item)"
+              >
+                <span>{{ $t('common.videoList.replaceBackgroundTitle') }}</span>
+              </div>
+              <div
+                v-if="item.status === 'success' && item.text_content"
+                class="subtitle-button"
+                @click="downloadSubtitle(item)"
+              >
+                <span>{{ $t('common.videoList.exportSubtitleTitle') }}</span>
               </div>
               <div v-if="item.status === 'failed'" class="detection-failed-text">
                 {{ $t('common.videoList.makeFailedText') }}
@@ -152,12 +171,47 @@
       @cancel="cancelFun"
     />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
+    <t-dialog
+      v-model:visible="state.showBackgroundDialog"
+      :header="$t('common.videoList.replaceBackgroundDialogTitle')"
+      :confirm-btn="$t('common.videoList.startReplace')"
+      :confirm-loading="state.backgroundProcessing"
+      :close-on-overlay-click="!state.backgroundProcessing"
+      :on-confirm="replaceBackground"
+    >
+      <div class="background-dialog-content">
+        <t-button theme="default" variant="outline" :disabled="state.backgroundProcessing" @click="selectBackground">
+          {{ $t('common.videoList.selectBackground') }}
+        </t-button>
+        <div v-if="state.backgroundPath" class="background-path">{{ state.backgroundPath }}</div>
+        <div class="background-tip">{{ $t('common.videoList.backgroundTip') }}</div>
+        <div class="subtitle-output-row">
+          <div>
+            <div class="subtitle-output-title">{{ $t('common.videoList.keepSubtitles') }}</div>
+            <div class="subtitle-output-description">
+              {{
+                state.backgroundHasSubtitles
+                  ? $t('common.videoList.keepSubtitlesTip')
+                  : $t('common.videoList.noSubtitlesTip')
+              }}
+            </div>
+          </div>
+          <t-switch
+            v-model="state.backgroundIncludeSubtitles"
+            :disabled="state.backgroundProcessing || !state.backgroundHasSubtitles"
+          />
+        </div>
+        <div v-if="state.backgroundProcessing" class="background-processing">
+          {{ state.backgroundProgressText }}
+        </div>
+      </div>
+    </t-dialog>
   </div>
 </template>
 <script setup>
 import { reactive, onMounted, onBeforeUnmount, ref } from 'vue'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
-import { videoPage, exportVideo, removeVideo } from '@renderer/api/index.js'
+import { videoPage, exportVideo, exportSubtitle, removeVideo, replaceVideoBackground } from '@renderer/api/index.js'
 import { formatDate, millisecondsToTime } from '@renderer/utils/index.js'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
 import { Client } from '@renderer/client'
@@ -193,9 +247,29 @@ const state = reactive({
   url: `file:///B:/dd.mov`,
   formData: {
     name: ''
-  }
+  },
+  showBackgroundDialog: false,
+  backgroundProcessing: false,
+  backgroundProgressText: '',
+  backgroundPath: '',
+  backgroundVideo: null,
+  backgroundHasSubtitles: false,
+  backgroundIncludeSubtitles: false
 })
+
+const backgroundProgressHandler = (_event, phase) => {
+  const progressKeys = {
+    background: 'processingBackground',
+    audio: 'processingAudio',
+    subtitles: 'processingSubtitles',
+    cover: 'processingCover',
+    complete: 'processingComplete'
+  }
+  state.backgroundProgressText = t(`common.videoList.${progressKeys[phase] || 'processingBackground'}`)
+}
+
 onMounted(() => {
+  window.electron.ipcRenderer.on('background/progress', backgroundProgressHandler)
   videoPageAJax()
   state.interval = setInterval(() => {
     videoPageAJax()
@@ -203,6 +277,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   clearInterval(state.interval)
+  window.electron.ipcRenderer.removeListener('background/progress', backgroundProgressHandler)
 })
 const cancelFun = () => {
   state.showVideoDialog = false
@@ -286,6 +361,69 @@ const downloadVideo = async (video) => {
     console.log(error)
   }
 }
+
+const downloadSubtitle = async (video) => {
+  try {
+    const savePath = await Client.file.saveFile(`${video.name}.srt`)
+    if (!savePath) return
+    await exportSubtitle(video.id, savePath)
+    MessagePlugin.success(t('common.videoList.exportSubtitleSuccess'))
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.exportSubtitleFailed')}: ${error?.message || error}`)
+  }
+}
+
+const openBackgroundDialog = (video) => {
+  state.backgroundVideo = video
+  state.backgroundPath = ''
+  state.backgroundProgressText = ''
+  try {
+    const subtitleStyle = typeof video.subtitle_style === 'string'
+      ? JSON.parse(video.subtitle_style)
+      : video.subtitle_style
+    state.backgroundHasSubtitles = Boolean(subtitleStyle?.enabled && video.text_content?.trim())
+  } catch (error) {
+    console.warn('字幕设置读取失败', error)
+    state.backgroundHasSubtitles = false
+  }
+  state.backgroundIncludeSubtitles = state.backgroundHasSubtitles
+  state.showBackgroundDialog = true
+}
+
+const selectBackground = async () => {
+  state.backgroundPath = await Client.file.selectFile({
+    name: 'Images or Videos',
+    extensions: ['jpg', 'jpeg', 'png', 'webp', 'mp4', 'mov']
+  }) || ''
+}
+
+const replaceBackground = async () => {
+  if (!state.backgroundPath || !state.backgroundVideo) {
+    MessagePlugin.warning(t('common.videoList.selectBackground'))
+    return false
+  }
+
+  const saveName = `${state.backgroundVideo.name}-新背景.mp4`
+  const outputPath = await Client.file.saveFile(saveName)
+  if (!outputPath) return false
+
+  state.backgroundProcessing = true
+  state.backgroundProgressText = t('common.videoList.processingBackground')
+  try {
+    await replaceVideoBackground(state.backgroundVideo.id, state.backgroundPath, outputPath, {
+      includeSubtitles: state.backgroundIncludeSubtitles
+    })
+    MessagePlugin.success(t('common.videoList.replaceBackgroundSuccess'))
+    state.showBackgroundDialog = false
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.replaceBackgroundFailed')}: ${error?.message || error}`)
+  } finally {
+    state.backgroundProcessing = false
+  }
+  return false
+}
 </script>
 <style lang="less" scoped>
 .works-content-box {
@@ -368,6 +506,34 @@ const downloadVideo = async (video) => {
               img {
                 margin-right: 4px;
               }
+            }
+
+            .background-button {
+              width: 90px;
+              height: 30px;
+              margin-top: 8px;
+              cursor: pointer;
+              border: 1px solid rgba(255, 255, 255, 0.6);
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 12px;
+              color: #fff;
+            }
+
+            .subtitle-button {
+              width: 90px;
+              height: 30px;
+              margin-top: 8px;
+              cursor: pointer;
+              border: 1px solid rgba(255, 255, 255, 0.6);
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 12px;
+              color: #fff;
             }
 
             .detection-failed-text {
@@ -478,6 +644,12 @@ const downloadVideo = async (video) => {
               top: 0;
               video {
                 width: 100%;
+              }
+
+              .works-cover {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
               }
             }
 
@@ -626,6 +798,54 @@ const downloadVideo = async (video) => {
       display: flex;
       height: 46px;
     }
+  }
+}
+
+.background-dialog-content {
+  .background-path {
+    margin-top: 12px;
+    padding: 8px;
+    word-break: break-all;
+    border-radius: 4px;
+    background: #f4f5f7;
+    color: #555;
+    font-size: 12px;
+  }
+
+  .background-tip,
+  .background-processing {
+    margin-top: 12px;
+    color: #777;
+    font-size: 12px;
+  }
+
+  .background-processing {
+    color: #434af9;
+  }
+
+  .subtitle-output-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid #e7e7eb;
+    border-radius: 6px;
+    background: #fafafa;
+  }
+
+  .subtitle-output-title {
+    color: #252525;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .subtitle-output-description {
+    margin-top: 4px;
+    color: #777;
+    font-size: 12px;
+    line-height: 18px;
   }
 }
 </style>

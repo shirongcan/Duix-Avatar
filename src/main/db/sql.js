@@ -65,5 +65,35 @@ export default [
         script: `alter table video
                     add voice_id integer;
                 `
+    },
+    {
+        version: 4,
+        script: `alter table video
+                    add beauty text;
+                `
+    },
+    {
+        version: 5,
+        script: `alter table video
+                    add subtitle_style text;
+                `
+    },
+    {
+        version: 6,
+        script: `alter table video
+                    add subtitle_timing text;
+                `
+    },
+    {
+        version: 7,
+        script: `alter table video
+                    add source_file_path text;
+                `
+    },
+    {
+        version: 8,
+        script: `alter table video
+                    add cover_style text;
+                `
     }
 ]

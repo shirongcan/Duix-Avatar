@@ -1,16 +1,34 @@
 <template>
   <div class="edit">
     <div class="edit-header">{{ $t('common.editView.headerText') }}</div>
-    <t-radio-group class="edit-tabs" variant="default-filled" size="large" v-model="state.activeTab"
-      @change="action.onChangeTab">
-      <t-radio-button :value="EDIT_TABS.TEXT">{{ $t('common.editView.text') }}</t-radio-button>
-      <t-radio-button :value="EDIT_TABS.AUDIO">{{ $t('common.editView.audio') }}</t-radio-button>
-    </t-radio-group>
+    <div class="edit-tabs" role="tablist">
+      <button
+        v-for="tab in EDIT_TAB_OPTIONS"
+        :key="tab.value"
+        class="edit-tab"
+        :class="{ 'is-active': state.activeTab === tab.value }"
+        type="button"
+        role="tab"
+        :aria-selected="state.activeTab === tab.value"
+        @click="action.onChangeTab(tab.value)"
+      >
+        {{ $t(tab.label) }}
+      </button>
+    </div>
     <div class="edit-body edit-body-text" v-show="getter.isTextTab.value">
       <EditText v-model="select" class="content" :listener="listener" />
     </div>
     <div class="edit-body" v-show="getter.isAudioTab.value">
       <EditUpload v-model="select" class="content" :listener="listener" />
+    </div>
+    <div class="edit-body" v-show="getter.isBeautyTab.value">
+      <BeautyPanel v-model="select.beauty" class="content" />
+    </div>
+    <div class="edit-body edit-body-subtitle" v-show="getter.isSubtitleTab.value">
+      <SubtitlePanel v-model="select.subtitle" class="content" />
+    </div>
+    <div class="edit-body" v-show="getter.isCoverTab.value">
+      <CoverPanel v-model="select.cover" class="content" />
     </div>
     <EditListener ref="listener" />
   </div>
@@ -20,14 +38,28 @@ import { computed, reactive, ref } from 'vue'
 import EditListener from './EditListener.vue'
 import EditUpload from './EditUpload.vue';
 import EditText from './EditText.vue';
+import BeautyPanel from './BeautyPanel.vue'
+import SubtitlePanel from './SubtitlePanel.vue'
+import CoverPanel from './CoverPanel.vue'
 
 const select = defineModel({})
 
 
 const EDIT_TABS = {
   TEXT: '1',
-  AUDIO: '2'
+  AUDIO: '2',
+  BEAUTY: '3',
+  SUBTITLE: '4',
+  COVER: '5'
 }
+
+const EDIT_TAB_OPTIONS = [
+  { value: EDIT_TABS.TEXT, label: 'common.editView.text' },
+  { value: EDIT_TABS.AUDIO, label: 'common.editView.audio' },
+  { value: EDIT_TABS.BEAUTY, label: 'common.editView.beauty' },
+  { value: EDIT_TABS.SUBTITLE, label: 'common.editView.subtitle' },
+  { value: EDIT_TABS.COVER, label: 'common.editView.cover' }
+]
 
 const state = reactive({
   activeTab: EDIT_TABS.TEXT,
@@ -42,12 +74,25 @@ const getter = {
   }),
   isAudioTab: computed(() => {
     return state.activeTab === EDIT_TABS.AUDIO
+  }),
+  isBeautyTab: computed(() => {
+    return state.activeTab === EDIT_TABS.BEAUTY
+  }),
+  isSubtitleTab: computed(() => {
+    return state.activeTab === EDIT_TABS.SUBTITLE
+  }),
+  isCoverTab: computed(() => {
+    return state.activeTab === EDIT_TABS.COVER
   })
 }
 
 const action = {
-  onChangeTab() {
+  onChangeTab(tab) {
+    state.activeTab = tab
     listener.value?.pause()
+    if (select.value.cover) {
+      select.value.cover.previewing = state.activeTab === EDIT_TABS.COVER
+    }
   }
 }
 
@@ -70,29 +115,37 @@ const action = {
 
   &-tabs {
     margin: 12px 20px 0;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
     width: auto;
     padding: 6px;
     border-radius: 4px;
     background-color: #161718;
-    --td-bg-color-container-select: #2B3B52;
+  }
 
-    :deep(.t-radio-button) {
-      width: 50%;
-      border-radius: 4px;
+  &-tab {
+    min-width: 0;
+    height: 36px;
+    padding: 0 4px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 13px;
+    line-height: 20px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: transparent;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(43, 59, 82, 0.55);
     }
 
-    :deep(.t-radio-button__label) {
-      margin: auto;
-      font-weight: 400;
-      font-size: 14px;
-      color: #FFFFFF;
-      line-height: 20px;
-    }
-
-    :deep(.t-is-checked .t-radio-button__label) {
-      // font-weight: bold;
-      font-weight: 400;
+    &.is-active {
+      color: #ffffff;
+      background: #2b3b52;
     }
   }
 
@@ -118,6 +171,18 @@ const action = {
 
       .content {
         background-color: #161718;
+      }
+    }
+
+    &-subtitle {
+      height: 0;
+      min-height: 0;
+      overflow: hidden;
+
+      .content {
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
       }
     }
 

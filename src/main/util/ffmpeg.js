@@ -1,5 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg'
 import path from 'path'
+import { app } from 'electron'
 import log from '../logger.js'
 
 function initFFmpeg() {
@@ -25,12 +26,9 @@ function initFFmpeg() {
     )
   }
 
-  if(process.env.NODE_ENV === undefined){
-    process.env.NODE_ENV = 'production'
-  }
-
-  const ffmpegPathValue = ffmpegPath[`${process.env.NODE_ENV}-${process.platform}`]
-  log.debug('ENV:', `${process.env.NODE_ENV}-${process.platform}`)
+  const runtimeEnvironment = app.isPackaged ? 'production' : 'development'
+  const ffmpegPathValue = ffmpegPath[`${runtimeEnvironment}-${process.platform}`]
+  log.debug('ENV:', `${runtimeEnvironment}-${process.platform}`)
   log.info('FFmpeg path:', ffmpegPathValue)
   ffmpeg.setFfmpegPath(ffmpegPathValue)
 
@@ -56,7 +54,7 @@ function initFFmpeg() {
     )
   }
 
-  const ffprobePathValue = ffprobePath[`${process.env.NODE_ENV}-${process.platform}`]
+  const ffprobePathValue = ffprobePath[`${runtimeEnvironment}-${process.platform}`]
   log.info('FFprobe path:', ffprobePathValue)
   ffmpeg.setFfprobePath(ffprobePathValue)
 }
@@ -78,6 +76,135 @@ export function extractAudio(videoPath, audioPath) {
   })
 }
 
+/**
+ * 在音频开头补静音，让数字人出场后稍作停顿再开口。
+ */
+export function prependAudioSilence(inputPath, outputPath, durationSeconds = 1.5) {
+  const delayMilliseconds = Math.max(0, Math.round(Number(durationSeconds) * 1000))
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioFilters(`adelay=${delayMilliseconds}:all=1`)
+      .audioCodec('pcm_s16le')
+      .audioFrequency(44100)
+      .save(outputPath)
+      .on('end', () => {
+        log.info('audio lead-in silence added:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('adding audio lead-in silence failed:', err.message)
+        reject(err)
+      })
+  })
+}
+
+/**
+ * 将多个 TTS WAV 片段依次拼接，并在片段之间保留很短的自然停顿。
+ */
+export function concatAudioSegments(inputPaths, outputPath, pauseSeconds = 0.16) {
+  if (!Array.isArray(inputPaths) || inputPaths.length === 0) {
+    return Promise.reject(new Error('No audio segments to concatenate'))
+  }
+
+  const pause = Math.max(0, Number(pauseSeconds) || 0)
+  const command = ffmpeg()
+  inputPaths.forEach((inputPath) => command.input(inputPath))
+
+  const filters = inputPaths.map((_, index) => {
+    const pauseFilter = index < inputPaths.length - 1 && pause > 0
+      ? `,apad=pad_dur=${pause.toFixed(3)}`
+      : ''
+    return `[${index}:a]aresample=44100,aformat=sample_fmts=s16:channel_layouts=mono${pauseFilter}[a${index}]`
+  })
+  filters.push(`${inputPaths.map((_, index) => `[a${index}]`).join('')}concat=n=${inputPaths.length}:v=0:a=1[audio]`)
+
+  return new Promise((resolve, reject) => {
+    command
+      .complexFilter(filters)
+      .outputOptions(['-map [audio]'])
+      .audioCodec('pcm_s16le')
+      .audioChannels(1)
+      .audioFrequency(44100)
+      .save(outputPath)
+      .on('end', () => {
+        log.info('audio segments concatenated:', inputPaths.length)
+        resolve(outputPath)
+      })
+      .on('error', (error) => {
+        log.error('audio segment concatenation failed:', error.message)
+        reject(error)
+      })
+  })
+}
+
+/**
+ * 转为 FunASR 时间轴识别所需的 16 kHz 单声道裸 PCM。
+ */
+export function convertAudioToAsrPcm(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioCodec('pcm_s16le')
+      .format('s16le')
+      .save(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (error) => reject(error))
+  })
+}
+
+/**
+ * 检测音频中的真实说话区间，用于让字幕切换贴近语音停顿。
+ */
+export async function detectSpeechIntervals(inputPath) {
+  const duration = Number(await getVideoDuration(inputPath))
+  const silenceIntervals = []
+  let silenceStart = null
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioFilters('silencedetect=noise=-40dB:d=0.15')
+      .format('null')
+      .output('-')
+      .on('stderr', (line) => {
+        const startMatch = /silence_start:\s*([\d.]+)/.exec(line)
+        if (startMatch) silenceStart = Number(startMatch[1])
+
+        const endMatch = /silence_end:\s*([\d.]+)/.exec(line)
+        if (endMatch && silenceStart !== null) {
+          silenceIntervals.push({ start: silenceStart, end: Number(endMatch[1]) })
+          silenceStart = null
+        }
+      })
+      .on('end', resolve)
+      .on('error', reject)
+      .run()
+  })
+
+  if (silenceStart !== null) {
+    silenceIntervals.push({ start: silenceStart, end: duration })
+  }
+
+  const speechIntervals = []
+  let cursor = 0
+  silenceIntervals.forEach((silence) => {
+    const silenceStartTime = Math.min(duration, Math.max(cursor, silence.start))
+    if (silenceStartTime - cursor >= 0.08) {
+      speechIntervals.push({ start: cursor, end: silenceStartTime })
+    }
+    cursor = Math.min(duration, Math.max(cursor, silence.end))
+  })
+  if (duration - cursor >= 0.08) {
+    speechIntervals.push({ start: cursor, end: duration })
+  }
+
+  log.info('speech intervals detected:', speechIntervals.length)
+  return speechIntervals
+}
+
 export async function toH264(videoPath, outputPath) {
   // const hasNvidia = await detectNvidia()
   return new Promise((resolve, reject) => {
@@ -97,22 +224,22 @@ export async function toH264(videoPath, outputPath) {
 
 function detectNvidia() {
   return new Promise((resolve) => {
-    const exec = require('child_process').exec;
+    const exec = require('child_process').exec
     exec('nvidia-smi', (error, stdout, stderr) => {
       if (error || stderr) {
-        resolve(false);
+        resolve(false)
       } else {
-        resolve(true);
+        resolve(true)
       }
-    });
-  });
+    })
+  })
 }
 
 export function getVideoDuration(videoPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath).ffprobe((err, data) => {
       if (err) {
-        log.error("🚀 ~ ffmpeg ~ err:", err)
+        log.error('🚀 ~ ffmpeg ~ err:', err)
         reject(err)
       } else if (data && data.streams && data.streams.length > 0) {
         resolve(data.streams[0].duration) // 单位秒
@@ -121,5 +248,134 @@ export function getVideoDuration(videoPath) {
         reject(new Error('No streams found'))
       }
     })
+  })
+}
+
+function clamp(value, min, max) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : min
+}
+
+/**
+ * 使用 FFmpeg 内置滤镜对成片做轻量美颜，不依赖额外的人脸模型。
+ */
+export function applyBeautyFilter(inputPath, outputPath, beauty = {}) {
+  const smoothing = clamp(beauty.smoothing, 0, 100)
+  const brighten = clamp(beauty.brighten, 0, 100)
+  const rosy = clamp(beauty.rosy, 0, 100)
+  const filters = []
+
+  if (smoothing > 0) {
+    filters.push(
+      `hqdn3d=${(smoothing * 0.06).toFixed(2)}:${(smoothing * 0.045).toFixed(2)}:${(smoothing * 0.09).toFixed(2)}:${(smoothing * 0.0675).toFixed(2)}`
+    )
+  }
+  if (brighten > 0) {
+    filters.push(
+      `eq=brightness=${(brighten * 0.0012).toFixed(3)}:gamma=${(1 + brighten * 0.0015).toFixed(3)}:saturation=1.02`
+    )
+  }
+  if (rosy > 0) {
+    const red = (rosy * 0.0012).toFixed(3)
+    const blue = (-rosy * 0.00045).toFixed(3)
+    filters.push(`colorbalance=rm=${red}:rh=${red}:bm=${blue}:bh=${blue}`)
+  }
+
+  if (!filters.length) return Promise.resolve(inputPath)
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoFilters(filters)
+      .videoCodec('libx264')
+      .audioCodec('copy')
+      .outputOptions(['-preset medium', '-crf 18', '-pix_fmt yuv420p', '-movflags +faststart'])
+      .save(outputPath)
+      .on('end', () => {
+        log.info('beauty filter done:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('beauty filter failed:', err.message)
+        reject(err)
+      })
+  })
+}
+
+export function burnAssSubtitles(inputPath, outputPath, assPath) {
+  const escapedAssPath = assPath.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'")
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoFilters(`ass='${escapedAssPath}'`)
+      .videoCodec('libx264')
+      .audioCodec('copy')
+      .outputOptions(['-preset medium', '-crf 18', '-pix_fmt yuv420p', '-movflags +faststart'])
+      .save(outputPath)
+      .on('end', () => {
+        log.info('subtitle burn-in done:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('subtitle burn-in failed:', err.message)
+        reject(err)
+      })
+  })
+}
+
+function getVideoDimensions(videoPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath).ffprobe((err, data) => {
+      if (err) {
+        reject(err)
+        return
+      }
+      const stream = data?.streams?.find((item) => item.codec_type === 'video')
+      if (!stream?.width || !stream?.height) {
+        reject(new Error('No video dimensions found'))
+        return
+      }
+      resolve({ width: stream.width, height: stream.height })
+    })
+  })
+}
+
+/**
+ * 将静态封面覆盖在视频开头，不改变视频总时长和音频时间轴。
+ */
+export async function applyVideoCover(inputPath, outputPath, coverPath, durationSeconds = 1.5) {
+  const { width, height } = await getVideoDimensions(inputPath)
+  const duration = clamp(durationSeconds, 0.2, 10)
+  const coverFilter = [
+    `[1:v]scale=${width}:${height}:force_original_aspect_ratio=increase`,
+    `crop=${width}:${height}`,
+    'setsar=1[cover]',
+    `[0:v][cover]overlay=0:0:enable='between(t,0,${duration.toFixed(3)})'[video]`
+  ].join(',')
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .input(coverPath)
+      .inputOptions(['-loop 1'])
+      .complexFilter(coverFilter)
+      .outputOptions([
+        '-map [video]',
+        '-map 0:a:0?',
+        '-c:v libx264',
+        '-c:a copy',
+        '-preset medium',
+        '-crf 18',
+        '-pix_fmt yuv420p',
+        '-movflags +faststart',
+        '-shortest'
+      ])
+      .save(outputPath)
+      .on('end', () => {
+        log.info('video cover applied:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('video cover failed:', err.message)
+        reject(err)
+      })
   })
 }
