@@ -7,8 +7,13 @@ import { assetPath } from '../config/config.js'
 import log from '../logger.js'
 import { ipcMain } from 'electron'
 import dayjs from 'dayjs'
+import { transcribePcmWithTimestamps } from '../api/asr.js'
+import { concatAudioSegments, convertAudioToAsrPcm } from '../util/ffmpeg.js'
+import { evaluateTtsTranscript, splitTtsText } from '../util/tts-text.js'
 
 const MODEL_NAME = 'voice'
+const TTS_SERVICE_CHUNK_LENGTH = 300
+const TTS_MAX_ATTEMPTS = 3
 
 export function getAllTimbre() {
   return selectAll()
@@ -30,8 +35,8 @@ export async function train(path, lang = 'zh') {
   }
 }
 
-export function makeAudio4Video({voiceId, text}) {
-  return makeAudio({voiceId, text, targetDir: assetPath.ttsProduct})
+export function makeAudio4Video({voiceId, text, onProgress}) {
+  return makeAudio({voiceId, text, targetDir: assetPath.ttsProduct, onProgress})
 }
 
 export function copyAudio4Video(filePath) {
@@ -43,39 +48,140 @@ export function copyAudio4Video(filePath) {
   return fileName
 }
 
-export async function makeAudio({voiceId, text, targetDir}) {
-  const uuid = crypto.randomUUID()
-  const voice = selectByID(voiceId)
+function createTtsSeed(voiceId, text, segmentIndex, attempt) {
+  const digest = crypto
+    .createHash('sha256')
+    .update(`${voiceId}|${text}|${segmentIndex}|${attempt}`)
+    .digest()
+  return digest.readUInt32BE(0) & 0x7fffffff
+}
 
-  return makeAudioApi({
-    speaker: uuid,
+function removeTemporaryFile(filePath) {
+  if (!filePath) return
+  try {
+    fs.rmSync(filePath, { force: true })
+  } catch (error) {
+    log.warn('Unable to remove temporary TTS file:', error.message)
+  }
+}
+
+async function verifyAudioSegment(audioPath, expectedText) {
+  const parsedPath = path.parse(audioPath)
+  const pcmPath = path.join(parsedPath.dir, `${parsedPath.name}.verify.pcm`)
+
+  try {
+    await convertAudioToAsrPcm(audioPath, pcmPath)
+    const result = await transcribePcmWithTimestamps(pcmPath, { timeoutMilliseconds: 60000 })
+    const transcript = result?.text || result?.stamp_sents
+      ?.map((sentence) => sentence.text_seg || '')
+      .join('') || ''
+    return { skipped: false, transcript, ...evaluateTtsTranscript(expectedText, transcript) }
+  } finally {
+    removeTemporaryFile(pcmPath)
+  }
+}
+
+function buildTtsParams({ speaker, text, voice, seed }) {
+  return {
+    speaker,
     text,
     format: 'wav',
     topP: 0.7,
     max_new_tokens: 1024,
-    chunk_length: 100,
+    chunk_length: TTS_SERVICE_CHUNK_LENGTH,
     repetition_penalty: 1.2,
     temperature: 0.7,
     need_asr: false,
     streaming: false,
-    is_fixed_seed: 0,
+    seed,
     is_norm: 1,
     reference_audio: voice.asr_format_audio_url,
     reference_text: voice.reference_audio_text
-  })
-    .then((res) => {
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, {
-          recursive: true
-        })
+  }
+}
+
+export async function makeAudio({voiceId, text, targetDir, onProgress}) {
+  const uuid = crypto.randomUUID()
+  const voice = selectByID(voiceId)
+  if (!voice) throw new Error('找不到所选音色')
+
+  const segments = splitTtsText(text)
+  if (segments.length === 0) throw new Error('请输入需要转换为语音的文字')
+
+  fs.mkdirSync(targetDir, { recursive: true })
+  const outputName = `${uuid}.wav`
+  const outputPath = path.join(targetDir, outputName)
+  const completedSegmentPaths = []
+
+  try {
+    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+      const segmentText = segments[segmentIndex]
+      let completedPath = null
+
+      for (let attempt = 1; attempt <= TTS_MAX_ATTEMPTS; attempt++) {
+        onProgress?.({ phase: 'generating', index: segmentIndex + 1, total: segments.length, attempt })
+        const segmentPath = path.join(
+          targetDir,
+          `${uuid}.part-${String(segmentIndex + 1).padStart(3, '0')}.attempt-${attempt}.wav`
+        )
+        const seed = createTtsSeed(voiceId, segmentText, segmentIndex, attempt)
+        const response = await makeAudioApi(
+          buildTtsParams({
+            speaker: `${uuid}-${segmentIndex + 1}-${attempt}`,
+            text: segmentText,
+            voice,
+            seed
+          })
+        )
+        fs.writeFileSync(segmentPath, response, 'binary')
+
+        let verification
+        try {
+          onProgress?.({ phase: 'verifying', index: segmentIndex + 1, total: segments.length, attempt })
+          verification = await verifyAudioSegment(segmentPath, segmentText)
+        } catch (error) {
+          log.warn('Unable to verify TTS segment; keeping generated audio:', error.message)
+          verification = { passed: true, skipped: true }
+        }
+
+        if (verification.passed) {
+          completedPath = segmentPath
+          log.info(
+            `TTS segment ${segmentIndex + 1}/${segments.length} accepted`,
+            verification.skipped ? '(verification unavailable)' : `coverage=${verification.coverage.toFixed(3)}`
+          )
+          break
+        }
+
+        log.warn(
+          `TTS segment ${segmentIndex + 1}/${segments.length} incomplete; retrying`,
+          `coverage=${verification.coverage.toFixed(3)}`,
+          `end=${verification.endCoverage.toFixed(3)}`
+        )
+        removeTemporaryFile(segmentPath)
       }
-      fs.writeFileSync(path.join(targetDir, `${uuid}.wav`), res, 'binary')
-      return `${uuid}.wav`
-    })
-    .catch((error) => {
-      log.error('Error generating audio:', error)
-      throw error
-    })
+
+      if (!completedPath) {
+        throw new Error(`第 ${segmentIndex + 1} 段语音连续生成不完整，请重新生成`)
+      }
+      completedSegmentPaths.push(completedPath)
+    }
+
+    onProgress?.({ phase: 'merging', index: segments.length, total: segments.length, attempt: 1 })
+    if (completedSegmentPaths.length === 1) {
+      fs.renameSync(completedSegmentPaths[0], outputPath)
+      completedSegmentPaths.length = 0
+    } else {
+      await concatAudioSegments(completedSegmentPaths, outputPath)
+    }
+    return outputName
+  } catch (error) {
+    removeTemporaryFile(outputPath)
+    log.error('Error generating audio:', error)
+    throw error
+  } finally {
+    completedSegmentPaths.forEach(removeTemporaryFile)
+  }
 }
 
 /**

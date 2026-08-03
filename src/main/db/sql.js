@@ -89,5 +89,11 @@ export default [
         script: `alter table video
                     add source_file_path text;
                 `
+    },
+    {
+        version: 8,
+        script: `alter table video
+                    add cover_style text;
+                `
     }
 ]

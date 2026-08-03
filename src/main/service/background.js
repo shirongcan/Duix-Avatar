@@ -6,7 +6,12 @@ import path from 'path'
 import ffmpeg from 'fluent-ffmpeg'
 import { assetPath } from '../config/config.js'
 import { selectByID as selectVideoByID } from '../dao/video.js'
-import { hasEnabledSubtitles, renderVideoSubtitles } from './video.js'
+import {
+  hasEnabledCover,
+  hasEnabledSubtitles,
+  renderVideoCover,
+  renderVideoSubtitles
+} from './video.js'
 import log from '../logger.js'
 
 const MODEL_NAME = 'background'
@@ -96,22 +101,31 @@ async function replaceBackground(videoId, backgroundPath, outputPath, options = 
   const stagedBackgroundPath = path.join(stagingDirectory, `${taskId}-background${backgroundExtension}`)
   const silentOutputPath = path.join(stagingDirectory, `${taskId}-silent.mp4`)
   const audioOutputPath = path.join(stagingDirectory, `${taskId}-audio.mp4`)
+  const subtitleOutputPath = path.join(stagingDirectory, `${taskId}-subtitled.mp4`)
   const includeSubtitles = options.includeSubtitles !== false && hasEnabledSubtitles(video)
+  const includeCover = hasEnabledCover(video)
+  const requiresPostProcessing = includeSubtitles || includeCover
 
   try {
     fs.copyFileSync(backgroundPath, stagedBackgroundPath)
     onProgress('background')
     await runMatting(sourcePath, stagedBackgroundPath, silentOutputPath)
     onProgress('audio')
-    await mergeOriginalAudio(silentOutputPath, sourcePath, includeSubtitles ? audioOutputPath : outputPath)
+    await mergeOriginalAudio(silentOutputPath, sourcePath, requiresPostProcessing ? audioOutputPath : outputPath)
+    let processedPath = audioOutputPath
     if (includeSubtitles) {
       onProgress('subtitles')
-      await renderVideoSubtitles(video, audioOutputPath, outputPath)
+      await renderVideoSubtitles(video, processedPath, includeCover ? subtitleOutputPath : outputPath)
+      processedPath = subtitleOutputPath
+    }
+    if (includeCover) {
+      onProgress('cover')
+      await renderVideoCover(video, processedPath, outputPath)
     }
     onProgress('complete')
     return outputPath
   } finally {
-    for (const temporaryPath of [stagedBackgroundPath, silentOutputPath, audioOutputPath]) {
+    for (const temporaryPath of [stagedBackgroundPath, silentOutputPath, audioOutputPath, subtitleOutputPath]) {
       try {
         fs.rmSync(temporaryPath, { force: true })
       } catch (error) {

@@ -19,6 +19,7 @@ import { transcribePcmWithTimestamps } from '../api/asr.js'
 import log from '../logger.js'
 import {
   applyBeautyFilter,
+  applyVideoCover,
   burnAssSubtitles,
   convertAudioToAsrPcm,
   detectSpeechIntervals,
@@ -30,6 +31,7 @@ import { createAss, createSrt } from '../util/subtitle.js'
 const MODEL_NAME = 'video'
 const VIDEO_LEAD_IN_SECONDS = 1.5
 const LEAD_IN_AUDIO_SUFFIX = '.leadin.wav'
+const COVER_DIRECTORY = path.join(assetPath.model, 'covers')
 
 function getVideoLeadInSeconds(audioPath) {
   return String(audioPath || '').endsWith(LEAD_IN_AUDIO_SUFFIX) ? VIDEO_LEAD_IN_SECONDS : 0
@@ -123,10 +125,7 @@ function page({ page, pageSize, name = '' }) {
   const waitingVideos = selectByStatus('waiting').map((v) => v.id)
   const total = count(name)
   const list = selectPage({ page, pageSize, name }).map((video) => {
-    video = {
-      ...video,
-      file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
-    }
+    video = resolveVideoPaths(video)
 
     if(video.status === 'waiting'){
       video.progress = `${waitingVideos.indexOf(video.id) + 1} / ${waitingVideos.length}`
@@ -141,22 +140,20 @@ function page({ page, pageSize, name = '' }) {
 }
 
 function findVideo(videoId) {
-  const video = selectVideoByID(videoId)
-  return {
-    ...video,
-    file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
-  }
+  return resolveVideoPaths(selectVideoByID(videoId))
 }
 
 function countVideo(name = '') {
   return count(name)
 }
 
-function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, beauty, subtitle_style }) {
+function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, beauty, subtitle_style, cover_style }) {
   const video = selectVideoByID(id)
   if(audio_path){
     audio_path = copyAudio4Video(audio_path)
   }
+
+  const persistedCoverStyle = persistCoverStyle(cover_style, video?.cover_style)
 
   if (video) {
     return update({
@@ -168,10 +165,113 @@ function saveVideo({ id, model_id, name, text_content, voice_id, audio_path, bea
       audio_path,
       beauty,
       subtitle_style,
+      cover_style: persistedCoverStyle,
       subtitle_timing: null
     })
   }
-  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path, beauty, subtitle_style })
+  return insertVideo({
+    model_id,
+    name,
+    status: 'draft',
+    text_content,
+    voice_id,
+    audio_path,
+    beauty,
+    subtitle_style,
+    cover_style: persistedCoverStyle
+  })
+}
+
+function parseJSON(value) {
+  if (!value) return null
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(value)
+  } catch (_error) {
+    return null
+  }
+}
+
+export function parseCoverStyle(value) {
+  const style = parseJSON(value)
+  if (!style?.enabled || !style?.imagePath) return null
+  return {
+    enabled: true,
+    imagePath: String(style.imagePath),
+    duration: VIDEO_LEAD_IN_SECONDS
+  }
+}
+
+function absoluteCoverPath(imagePath) {
+  return path.isAbsolute(imagePath) ? imagePath : path.join(assetPath.model, imagePath)
+}
+
+function isPathInside(parentPath, targetPath) {
+  const relativePath = path.relative(parentPath, targetPath)
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+}
+
+function removeManagedCover(styleValue) {
+  const style = parseCoverStyle(styleValue)
+  if (!style) return
+  const coverPath = absoluteCoverPath(style.imagePath)
+  if (isPathInside(COVER_DIRECTORY, coverPath)) {
+    try {
+      fs.rmSync(coverPath, { force: true })
+    } catch (error) {
+      log.warn('Unable to remove managed cover:', error.message)
+    }
+  }
+}
+
+function persistCoverStyle(styleValue, previousStyleValue) {
+  const style = parseCoverStyle(styleValue)
+  if (!style) {
+    removeManagedCover(previousStyleValue)
+    return { enabled: false, imagePath: '', duration: VIDEO_LEAD_IN_SECONDS }
+  }
+
+  const sourcePath = absoluteCoverPath(style.imagePath)
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error('找不到选择的视频封面图片')
+  }
+  const extension = path.extname(sourcePath).toLowerCase()
+  if (!['.jpg', '.jpeg', '.png'].includes(extension)) {
+    throw new Error('视频封面仅支持 JPG、PNG 图片')
+  }
+
+  fs.mkdirSync(COVER_DIRECTORY, { recursive: true })
+  let managedPath = sourcePath
+  if (!isPathInside(COVER_DIRECTORY, sourcePath)) {
+    managedPath = path.join(COVER_DIRECTORY, `${crypto.randomUUID()}${extension}`)
+    fs.copyFileSync(sourcePath, managedPath)
+  }
+
+  const previousStyle = parseCoverStyle(previousStyleValue)
+  if (previousStyle) {
+    const previousPath = absoluteCoverPath(previousStyle.imagePath)
+    if (path.resolve(previousPath) !== path.resolve(managedPath)) {
+      removeManagedCover(previousStyle)
+    }
+  }
+
+  return {
+    enabled: true,
+    imagePath: path.relative(assetPath.model, managedPath),
+    duration: VIDEO_LEAD_IN_SECONDS
+  }
+}
+
+function resolveVideoPaths(video) {
+  if (!video) return video
+  const coverStyle = parseCoverStyle(video.cover_style)
+  return {
+    ...video,
+    file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path,
+    cover_style: coverStyle
+      ? { ...coverStyle, imagePath: absoluteCoverPath(coverStyle.imagePath) }
+      : { enabled: false, imagePath: '', duration: VIDEO_LEAD_IN_SECONDS }
+  }
 }
 
 function parseSubtitleStyle(value) {
@@ -224,6 +324,19 @@ export async function renderVideoSubtitles(video, inputPath, outputPath, options
       log.warn('Unable to remove temporary subtitle file:', cleanupError.message)
     }
   }
+}
+
+export function hasEnabledCover(video) {
+  return Boolean(parseCoverStyle(video?.cover_style))
+}
+
+export async function renderVideoCover(video, inputPath, outputPath) {
+  const style = parseCoverStyle(video?.cover_style)
+  if (!style) return false
+  const coverPath = absoluteCoverPath(style.imagePath)
+  if (!fs.existsSync(coverPath)) throw new Error('找不到视频封面图片')
+  await applyVideoCover(inputPath, outputPath, coverPath, VIDEO_LEAD_IN_SECONDS)
+  return true
 }
 
 function parseBeauty(value) {
@@ -279,7 +392,17 @@ export async function synthesisVideo(videoId) {
       // 调用tts接口生成音频
       audioPath = await makeAudio4Video({
         voiceId: voice.id,
-        text: video.text_content
+        text: video.text_content,
+        onProgress: ({ phase, index, total, attempt }) => {
+          if (phase === 'generating') {
+            const retry = attempt > 1 ? `，第 ${attempt} 次尝试` : ''
+            updateStatus(videoId, 'pending', `正在生成语音 ${index}/${total}${retry}`)
+          } else if (phase === 'verifying') {
+            updateStatus(videoId, 'pending', `正在检查语音完整性 ${index}/${total}`)
+          } else if (phase === 'merging') {
+            updateStatus(videoId, 'pending', '正在合并语音片段')
+          }
+        }
       })
       log.debug('~ makeVideo ~ audioPath:', audioPath)
     }
@@ -403,6 +526,26 @@ export async function loopPending() {
           }
           resultPath = subtitleOutputPath
         }
+        if (hasEnabledCover(video)) {
+          const parsedPath = path.parse(resultPath)
+          const coverOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.covered.mp4`)
+          if (!fs.existsSync(coverOutputPath)) {
+            updateStatus(video.id, 'pending', '正在添加视频封面', 99)
+            try {
+              await renderVideoCover(video, resultPath, coverOutputPath)
+            } catch (error) {
+              try {
+                fs.rmSync(coverOutputPath, { force: true })
+              } catch (cleanupError) {
+                log.warn('Unable to remove failed cover output:', cleanupError.message)
+              }
+              updateStatus(video.id, 'failed', `封面处理失败：${error.message}`)
+              setTimeout(() => loopPending(), 2000)
+              return video
+            }
+          }
+          resultPath = coverOutputPath
+        }
         statusRes.data.result = path.relative(assetPath.model, resultPath)
       }
 
@@ -451,6 +594,8 @@ function removeVideo(videoId) {
     const videoPath = path.join(assetPath.model, filePath)
     if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath)
   }
+
+  removeManagedCover(video.cover_style)
 
   // 删除音频
   const audioPath = path.join(assetPath.model, video.audio_path ||'')

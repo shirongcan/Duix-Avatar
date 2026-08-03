@@ -101,6 +101,45 @@ export function prependAudioSilence(inputPath, outputPath, durationSeconds = 1.5
 }
 
 /**
+ * 将多个 TTS WAV 片段依次拼接，并在片段之间保留很短的自然停顿。
+ */
+export function concatAudioSegments(inputPaths, outputPath, pauseSeconds = 0.16) {
+  if (!Array.isArray(inputPaths) || inputPaths.length === 0) {
+    return Promise.reject(new Error('No audio segments to concatenate'))
+  }
+
+  const pause = Math.max(0, Number(pauseSeconds) || 0)
+  const command = ffmpeg()
+  inputPaths.forEach((inputPath) => command.input(inputPath))
+
+  const filters = inputPaths.map((_, index) => {
+    const pauseFilter = index < inputPaths.length - 1 && pause > 0
+      ? `,apad=pad_dur=${pause.toFixed(3)}`
+      : ''
+    return `[${index}:a]aresample=44100,aformat=sample_fmts=s16:channel_layouts=mono${pauseFilter}[a${index}]`
+  })
+  filters.push(`${inputPaths.map((_, index) => `[a${index}]`).join('')}concat=n=${inputPaths.length}:v=0:a=1[audio]`)
+
+  return new Promise((resolve, reject) => {
+    command
+      .complexFilter(filters)
+      .outputOptions(['-map [audio]'])
+      .audioCodec('pcm_s16le')
+      .audioChannels(1)
+      .audioFrequency(44100)
+      .save(outputPath)
+      .on('end', () => {
+        log.info('audio segments concatenated:', inputPaths.length)
+        resolve(outputPath)
+      })
+      .on('error', (error) => {
+        log.error('audio segment concatenation failed:', error.message)
+        reject(error)
+      })
+  })
+}
+
+/**
  * 转为 FunASR 时间轴识别所需的 16 kHz 单声道裸 PCM。
  */
 export function convertAudioToAsrPcm(inputPath, outputPath) {
@@ -278,6 +317,64 @@ export function burnAssSubtitles(inputPath, outputPath, assPath) {
       })
       .on('error', (err) => {
         log.error('subtitle burn-in failed:', err.message)
+        reject(err)
+      })
+  })
+}
+
+function getVideoDimensions(videoPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath).ffprobe((err, data) => {
+      if (err) {
+        reject(err)
+        return
+      }
+      const stream = data?.streams?.find((item) => item.codec_type === 'video')
+      if (!stream?.width || !stream?.height) {
+        reject(new Error('No video dimensions found'))
+        return
+      }
+      resolve({ width: stream.width, height: stream.height })
+    })
+  })
+}
+
+/**
+ * 将静态封面覆盖在视频开头，不改变视频总时长和音频时间轴。
+ */
+export async function applyVideoCover(inputPath, outputPath, coverPath, durationSeconds = 1.5) {
+  const { width, height } = await getVideoDimensions(inputPath)
+  const duration = clamp(durationSeconds, 0.2, 10)
+  const coverFilter = [
+    `[1:v]scale=${width}:${height}:force_original_aspect_ratio=increase`,
+    `crop=${width}:${height}`,
+    'setsar=1[cover]',
+    `[0:v][cover]overlay=0:0:enable='between(t,0,${duration.toFixed(3)})'[video]`
+  ].join(',')
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .input(coverPath)
+      .inputOptions(['-loop 1'])
+      .complexFilter(coverFilter)
+      .outputOptions([
+        '-map [video]',
+        '-map 0:a:0?',
+        '-c:v libx264',
+        '-c:a copy',
+        '-preset medium',
+        '-crf 18',
+        '-pix_fmt yuv420p',
+        '-movflags +faststart',
+        '-shortest'
+      ])
+      .save(outputPath)
+      .on('end', () => {
+        log.info('video cover applied:', outputPath)
+        resolve(outputPath)
+      })
+      .on('error', (err) => {
+        log.error('video cover failed:', err.message)
         reject(err)
       })
   })

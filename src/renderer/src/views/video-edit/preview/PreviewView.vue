@@ -36,6 +36,11 @@
             :src="localUrl.addFileProtocol(model.video_path)"
             @loadedmetadata="action.handleVideoMetadata"
           ></video>
+          <img
+            v-if="cover.enabled && cover.imagePath && cover.previewing"
+            class="cover-preview"
+            :src="localUrl.addFileProtocol(cover.imagePath)"
+          />
           <span
             v-if="getter.isEffectVisible.value"
             class="beauty-tint"
@@ -107,6 +112,10 @@ const props = defineProps({
   subtitle: {
     type: Object,
     default: () => ({ enabled: false })
+  },
+  cover: {
+    type: Object,
+    default: () => ({ enabled: false, imagePath: '', previewing: false })
   },
   text: {
     type: String,
@@ -325,6 +334,16 @@ onBeforeUnmount(() => {
       inset: 0;
       background: #ff8193;
       mix-blend-mode: soft-light;
+      pointer-events: none;
+    }
+
+    .cover-preview {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
       pointer-events: none;
     }
 

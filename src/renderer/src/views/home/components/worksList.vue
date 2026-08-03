@@ -33,7 +33,12 @@
                 {{ item.duration + '' ? millisecondsToTime(item.duration * 1000) : '00:00' }}
               </div>
               <div v-if="item.status === 'success'" class="works-video">
-                 <video :src="localUrl.addFileProtocol(item.file_path)"></video>
+                <img
+                  v-if="item.cover_style?.enabled && item.cover_style?.imagePath"
+                  class="works-cover"
+                  :src="localUrl.addFileProtocol(item.cover_style.imagePath)"
+                />
+                <video v-else :src="localUrl.addFileProtocol(item.file_path)"></video>
               </div>
               <!--  <video class="works-video" src="../../../assets/images/home/aa.mp4"></video> -->
               <img
@@ -257,6 +262,7 @@ const backgroundProgressHandler = (_event, phase) => {
     background: 'processingBackground',
     audio: 'processingAudio',
     subtitles: 'processingSubtitles',
+    cover: 'processingCover',
     complete: 'processingComplete'
   }
   state.backgroundProgressText = t(`common.videoList.${progressKeys[phase] || 'processingBackground'}`)
@@ -638,6 +644,12 @@ const replaceBackground = async () => {
               top: 0;
               video {
                 width: 100%;
+              }
+
+              .works-cover {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
               }
             }
 

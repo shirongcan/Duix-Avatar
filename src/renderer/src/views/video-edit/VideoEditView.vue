@@ -17,6 +17,7 @@
                 :model="state.select.model"
                 :beauty="state.select.beauty"
                 :subtitle="state.select.subtitle"
+                :cover="state.select.cover"
                 :text="state.select.text"
               />
             </t-col>
@@ -81,6 +82,12 @@ const state = reactive({
       outlineWidth: 3,
       position: 'bottom',
       verticalOffset: 0
+    },
+    cover: {
+      enabled: false,
+      imagePath: '',
+      duration: 1.5,
+      previewing: false
     }
   }
 })
@@ -185,6 +192,17 @@ const action = {
           console.warn('字幕样式读取失败，将使用默认值', error)
         }
       }
+      if (videoDetail.cover_style) {
+        try {
+          const coverStyle =
+            typeof videoDetail.cover_style === 'string'
+              ? JSON.parse(videoDetail.cover_style)
+              : videoDetail.cover_style
+          state.select.cover = { ...state.select.cover, ...coverStyle, previewing: false }
+        } catch (error) {
+          console.warn('封面参数读取失败，将使用默认值', error)
+        }
+      }
     }
   },
   async initModelDetail(modelId) {
@@ -254,6 +272,11 @@ const action = {
         outlineWidth: Number(select.subtitle.outlineWidth),
         position: String(select.subtitle.position),
         verticalOffset: Number(select.subtitle.verticalOffset || 0)
+      },
+      cover_style: {
+        enabled: Boolean(select.cover.enabled && select.cover.imagePath),
+        imagePath: String(select.cover.imagePath || ''),
+        duration: 1.5
       },
       ...sumitAudio
     })
