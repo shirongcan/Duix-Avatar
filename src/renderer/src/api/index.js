@@ -28,8 +28,8 @@ export function exportSubtitle(id, outputPath) {
   return window.electron.ipcRenderer.invoke('video/export-subtitle', id, outputPath)
 }
 
-export function replaceVideoBackground(id, backgroundPath, outputPath) {
-  return window.electron.ipcRenderer.invoke('background/replace', id, backgroundPath, outputPath)
+export function replaceVideoBackground(id, backgroundPath, outputPath, options = {}) {
+  return window.electron.ipcRenderer.invoke('background/replace', id, backgroundPath, outputPath, options)
 }
 
 export function modifyVideo(video) {

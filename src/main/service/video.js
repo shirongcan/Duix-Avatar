@@ -185,6 +185,47 @@ function parseSubtitleStyle(value) {
   }
 }
 
+export function hasEnabledSubtitles(video) {
+  return Boolean(parseSubtitleStyle(video?.subtitle_style) && video?.text_content?.trim())
+}
+
+export async function renderVideoSubtitles(video, inputPath, outputPath, options = {}) {
+  const subtitleStyle = parseSubtitleStyle(video?.subtitle_style)
+  if (!subtitleStyle || !video?.text_content?.trim()) return false
+
+  const duration = options.duration || await getVideoDuration(inputPath)
+  const assPath = options.assPath || path.join(
+    path.dirname(outputPath),
+    `${path.parse(outputPath).name}.${crypto.randomUUID()}.ass`
+  )
+
+  try {
+    const leadInSeconds = getVideoLeadInSeconds(video.audio_path)
+    const subtitleTiming = await getSubtitleTiming(video)
+    const speechIntervals = await getSubtitleSpeechIntervals(video.audio_path)
+    fs.writeFileSync(
+      assPath,
+      `\ufeff${createAss(
+        video.text_content,
+        duration,
+        subtitleStyle,
+        leadInSeconds,
+        speechIntervals,
+        subtitleTiming
+      )}`,
+      'utf8'
+    )
+    await burnAssSubtitles(inputPath, outputPath, assPath)
+    return true
+  } finally {
+    try {
+      fs.rmSync(assPath, { force: true })
+    } catch (cleanupError) {
+      log.warn('Unable to remove temporary subtitle file:', cleanupError.message)
+    }
+  }
+}
+
 function parseBeauty(value) {
   if (!value) return null
   try {
@@ -212,6 +253,7 @@ export async function synthesisVideo(videoId) {
     update({
       id: videoId,
       file_path: null,
+      source_file_path: null,
       status: 'pending',
       message: '正在提交任务',
       subtitle_timing: null
@@ -260,6 +302,7 @@ export async function synthesisVideo(videoId) {
       update({
         id: videoId,
         file_path: null,
+        source_file_path: null,
         status: 'pending',
         message: result,
         audio_path: audioPath,
@@ -270,6 +313,7 @@ export async function synthesisVideo(videoId) {
       update({
         id: videoId,
         file_path: null,
+        source_file_path: null,
         status: 'failed',
         message: result.msg,
         audio_path: audioPath,
@@ -312,8 +356,12 @@ export async function loopPending() {
     }else if (statusRes.data.status === 2) { // 合成成功
       // ffmpeg 获取视频时长
       let duration
+      let sourceResultPath = null
       if(process.env.NODE_ENV === 'development'){
         duration = 88
+        if (statusRes.data.result) {
+          sourceResultPath = path.join(assetPath.model, statusRes.data.result)
+        }
       }else{
         const sourcePath = path.join(assetPath.model, statusRes.data.result)
         let resultPath = sourcePath
@@ -333,31 +381,15 @@ export async function loopPending() {
           }
         }
         duration = await getVideoDuration(resultPath)
-        const subtitleStyle = parseSubtitleStyle(video.subtitle_style)
-        if (subtitleStyle && video.text_content?.trim()) {
+        sourceResultPath = resultPath
+        if (hasEnabledSubtitles(video)) {
           const parsedPath = path.parse(resultPath)
           const subtitleOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitled.mp4`)
-          const assPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitle.ass`)
           if (!fs.existsSync(subtitleOutputPath)) {
             updateStatus(video.id, 'pending', '正在分析语音时间轴', 99)
             try {
-              const leadInSeconds = getVideoLeadInSeconds(video.audio_path)
-              const subtitleTiming = await getSubtitleTiming(video)
-              const speechIntervals = await getSubtitleSpeechIntervals(video.audio_path)
               updateStatus(video.id, 'pending', '正在烧录字幕', 99)
-              fs.writeFileSync(
-                assPath,
-                `\ufeff${createAss(
-                  video.text_content,
-                  duration,
-                  subtitleStyle,
-                  leadInSeconds,
-                  speechIntervals,
-                  subtitleTiming
-                )}`,
-                'utf8'
-              )
-              await burnAssSubtitles(resultPath, subtitleOutputPath, assPath)
+              await renderVideoSubtitles(video, resultPath, subtitleOutputPath, { duration })
             } catch (error) {
               try {
                 fs.rmSync(subtitleOutputPath, { force: true })
@@ -367,12 +399,6 @@ export async function loopPending() {
               updateStatus(video.id, 'failed', `字幕烧录失败：${error.message}`)
               setTimeout(() => loopPending(), 2000)
               return video
-            } finally {
-              try {
-                fs.rmSync(assPath, { force: true })
-              } catch (cleanupError) {
-                log.warn('Unable to remove temporary subtitle file:', cleanupError.message)
-              }
             }
           }
           resultPath = subtitleOutputPath
@@ -386,6 +412,9 @@ export async function loopPending() {
         message: statusRes.data.msg,
         progress: statusRes.data.progress,
         file_path: statusRes.data.result,
+        source_file_path: sourceResultPath
+          ? path.relative(assetPath.model, sourceResultPath)
+          : statusRes.data.result,
         duration
       })
 
@@ -417,9 +446,10 @@ function removeVideo(videoId) {
   log.debug('~ removeVideo ~ videoId:', videoId)
 
   // 删除视频
-  const videoPath = path.join(assetPath.model, video.file_path ||'')
-  if (!isEmpty(video.file_path) && fs.existsSync(videoPath)) {
-    fs.unlinkSync(videoPath)
+  const videoPaths = new Set([video.file_path, video.source_file_path].filter((filePath) => !isEmpty(filePath)))
+  for (const filePath of videoPaths) {
+    const videoPath = path.join(assetPath.model, filePath)
+    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath)
   }
 
   // 删除音频

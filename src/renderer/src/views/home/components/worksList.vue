@@ -180,8 +180,24 @@
         </t-button>
         <div v-if="state.backgroundPath" class="background-path">{{ state.backgroundPath }}</div>
         <div class="background-tip">{{ $t('common.videoList.backgroundTip') }}</div>
+        <div class="subtitle-output-row">
+          <div>
+            <div class="subtitle-output-title">{{ $t('common.videoList.keepSubtitles') }}</div>
+            <div class="subtitle-output-description">
+              {{
+                state.backgroundHasSubtitles
+                  ? $t('common.videoList.keepSubtitlesTip')
+                  : $t('common.videoList.noSubtitlesTip')
+              }}
+            </div>
+          </div>
+          <t-switch
+            v-model="state.backgroundIncludeSubtitles"
+            :disabled="state.backgroundProcessing || !state.backgroundHasSubtitles"
+          />
+        </div>
         <div v-if="state.backgroundProcessing" class="background-processing">
-          {{ $t('common.videoList.processingBackground') }}
+          {{ state.backgroundProgressText }}
         </div>
       </div>
     </t-dialog>
@@ -229,10 +245,25 @@ const state = reactive({
   },
   showBackgroundDialog: false,
   backgroundProcessing: false,
+  backgroundProgressText: '',
   backgroundPath: '',
-  backgroundVideo: null
+  backgroundVideo: null,
+  backgroundHasSubtitles: false,
+  backgroundIncludeSubtitles: false
 })
+
+const backgroundProgressHandler = (_event, phase) => {
+  const progressKeys = {
+    background: 'processingBackground',
+    audio: 'processingAudio',
+    subtitles: 'processingSubtitles',
+    complete: 'processingComplete'
+  }
+  state.backgroundProgressText = t(`common.videoList.${progressKeys[phase] || 'processingBackground'}`)
+}
+
 onMounted(() => {
+  window.electron.ipcRenderer.on('background/progress', backgroundProgressHandler)
   videoPageAJax()
   state.interval = setInterval(() => {
     videoPageAJax()
@@ -240,6 +271,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   clearInterval(state.interval)
+  window.electron.ipcRenderer.removeListener('background/progress', backgroundProgressHandler)
 })
 const cancelFun = () => {
   state.showVideoDialog = false
@@ -339,6 +371,17 @@ const downloadSubtitle = async (video) => {
 const openBackgroundDialog = (video) => {
   state.backgroundVideo = video
   state.backgroundPath = ''
+  state.backgroundProgressText = ''
+  try {
+    const subtitleStyle = typeof video.subtitle_style === 'string'
+      ? JSON.parse(video.subtitle_style)
+      : video.subtitle_style
+    state.backgroundHasSubtitles = Boolean(subtitleStyle?.enabled && video.text_content?.trim())
+  } catch (error) {
+    console.warn('字幕设置读取失败', error)
+    state.backgroundHasSubtitles = false
+  }
+  state.backgroundIncludeSubtitles = state.backgroundHasSubtitles
   state.showBackgroundDialog = true
 }
 
@@ -360,8 +403,11 @@ const replaceBackground = async () => {
   if (!outputPath) return false
 
   state.backgroundProcessing = true
+  state.backgroundProgressText = t('common.videoList.processingBackground')
   try {
-    await replaceVideoBackground(state.backgroundVideo.id, state.backgroundPath, outputPath)
+    await replaceVideoBackground(state.backgroundVideo.id, state.backgroundPath, outputPath, {
+      includeSubtitles: state.backgroundIncludeSubtitles
+    })
     MessagePlugin.success(t('common.videoList.replaceBackgroundSuccess'))
     state.showBackgroundDialog = false
   } catch (error) {
@@ -763,6 +809,31 @@ const replaceBackground = async () => {
 
   .background-processing {
     color: #434af9;
+  }
+
+  .subtitle-output-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid #e7e7eb;
+    border-radius: 6px;
+    background: #fafafa;
+  }
+
+  .subtitle-output-title {
+    color: #252525;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .subtitle-output-description {
+    margin-top: 4px;
+    color: #777;
+    font-size: 12px;
+    line-height: 18px;
   }
 }
 </style>

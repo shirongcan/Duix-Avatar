@@ -6,6 +6,7 @@ import path from 'path'
 import ffmpeg from 'fluent-ffmpeg'
 import { assetPath } from '../config/config.js'
 import { selectByID as selectVideoByID } from '../dao/video.js'
+import { hasEnabledSubtitles, renderVideoSubtitles } from './video.js'
 import log from '../logger.js'
 
 const MODEL_NAME = 'background'
@@ -60,7 +61,25 @@ function mergeOriginalAudio(silentVideoPath, sourcePath, outputPath) {
   })
 }
 
-async function replaceBackground(videoId, backgroundPath, outputPath) {
+function resolveCleanSourcePath(video) {
+  const candidates = []
+  if (video.source_file_path) candidates.push(video.source_file_path)
+
+  if (video.file_path) {
+    const parsedPath = path.parse(video.file_path)
+    if (parsedPath.name.endsWith('.subtitled')) {
+      candidates.push(path.join(parsedPath.dir, `${parsedPath.name.slice(0, -'.subtitled'.length)}${parsedPath.ext}`))
+    } else {
+      candidates.push(video.file_path)
+    }
+  }
+
+  const sourceFilePath = candidates.find((candidate) => fs.existsSync(path.join(assetPath.model, candidate)))
+  if (!sourceFilePath) throw new Error('找不到可用于背景处理的无字幕视频')
+  return path.join(assetPath.model, sourceFilePath)
+}
+
+async function replaceBackground(videoId, backgroundPath, outputPath, options = {}, onProgress = () => {}) {
   if (!backgroundPath || !outputPath) {
     throw new Error('请选择背景和输出位置')
   }
@@ -71,19 +90,28 @@ async function replaceBackground(videoId, backgroundPath, outputPath) {
   }
 
   fs.mkdirSync(stagingDirectory, { recursive: true })
-  const sourcePath = path.join(assetPath.model, video.file_path)
+  const sourcePath = resolveCleanSourcePath(video)
   const taskId = crypto.randomUUID()
   const backgroundExtension = path.extname(backgroundPath).toLowerCase()
   const stagedBackgroundPath = path.join(stagingDirectory, `${taskId}-background${backgroundExtension}`)
   const silentOutputPath = path.join(stagingDirectory, `${taskId}-silent.mp4`)
+  const audioOutputPath = path.join(stagingDirectory, `${taskId}-audio.mp4`)
+  const includeSubtitles = options.includeSubtitles !== false && hasEnabledSubtitles(video)
 
   try {
     fs.copyFileSync(backgroundPath, stagedBackgroundPath)
+    onProgress('background')
     await runMatting(sourcePath, stagedBackgroundPath, silentOutputPath)
-    await mergeOriginalAudio(silentOutputPath, sourcePath, outputPath)
+    onProgress('audio')
+    await mergeOriginalAudio(silentOutputPath, sourcePath, includeSubtitles ? audioOutputPath : outputPath)
+    if (includeSubtitles) {
+      onProgress('subtitles')
+      await renderVideoSubtitles(video, audioOutputPath, outputPath)
+    }
+    onProgress('complete')
     return outputPath
   } finally {
-    for (const temporaryPath of [stagedBackgroundPath, silentOutputPath]) {
+    for (const temporaryPath of [stagedBackgroundPath, silentOutputPath, audioOutputPath]) {
       try {
         fs.rmSync(temporaryPath, { force: true })
       } catch (error) {
@@ -94,5 +122,13 @@ async function replaceBackground(videoId, backgroundPath, outputPath) {
 }
 
 export function init() {
-  ipcMain.handle(`${MODEL_NAME}/replace`, (event, ...args) => replaceBackground(...args))
+  ipcMain.handle(`${MODEL_NAME}/replace`, (event, videoId, backgroundPath, outputPath, options = {}) =>
+    replaceBackground(
+      videoId,
+      backgroundPath,
+      outputPath,
+      options,
+      (phase) => event.sender.send(`${MODEL_NAME}/progress`, phase)
+    )
+  )
 }

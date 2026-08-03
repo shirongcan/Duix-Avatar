@@ -83,5 +83,11 @@ export default [
         script: `alter table video
                     add subtitle_timing text;
                 `
+    },
+    {
+        version: 7,
+        script: `alter table video
+                    add source_file_path text;
+                `
     }
 ]

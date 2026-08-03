@@ -68,7 +68,7 @@ const state = reactive({
     modelList: [],
     uploaded: null,
     beauty: {
-      enabled: true,
+      enabled: false,
       smoothing: 35,
       brighten: 15,
       rosy: 8
