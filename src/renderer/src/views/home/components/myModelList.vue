@@ -55,6 +55,9 @@
                 <img src="../../../assets/images/home/video.svg" />
                 <span>{{ $t('common.myModelList.createVideoText') }}</span>
               </div>
+              <div class="voice-calibrate-button" @click.stop="calibrateVoice(item)">
+                <span>{{ $t('common.myModelList.voiceCalibrateText') }}</span>
+              </div>
               <div class="detection-failed-text" style="display: none">
                 训练失败
                 <img src="../../../assets/images/home/icon-delete.svg" />
@@ -101,6 +104,7 @@
       @cancel="cancelFun"
     />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
+    <ReferenceTextDialog ref="referenceTextDialogRef" @saved="modelPageAJax" />
   </div>
 </template>
 <script setup>
@@ -111,6 +115,7 @@ import { formatDate } from '@renderer/utils/index.js'
 import { useRouter } from 'vue-router'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
 import DeleteDialog from '@renderer/components/deleteDialog.vue'
+import ReferenceTextDialog from '@renderer/components/referenceTextDialog.vue'
 import { useHomeStore } from '@renderer/stores/home.js'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { createModel } from '@renderer/components/model-create'
@@ -130,6 +135,7 @@ const globalZh = merge(zhConfig, {
 const home = useHomeStore()
 const router = useRouter()
 const deleteDialogRef = ref(null)
+const referenceTextDialogRef = ref(null)
 const state = reactive({
   current: 1,
   pageSize: 10,
@@ -200,6 +206,11 @@ const delModel = (id) => {
   if (deleteDialogRef.value && deleteDialogRef.value.showDialogFun) {
     deleteDialogRef.value.showDialogFun()
     state.delModelId = id
+  }
+}
+const calibrateVoice = (item) => {
+  if (referenceTextDialogRef.value && referenceTextDialogRef.value.open) {
+    referenceTextDialogRef.value.open(item)
   }
 }
 defineExpose({
@@ -351,6 +362,23 @@ const tabClick = (index) => {
               img {
                 margin-right: 4px;
               }
+            }
+            .voice-calibrate-button {
+              padding: 0 5px;
+              height: 30px;
+              cursor: pointer;
+              background: rgba(0, 0, 0, 0.6);
+              border-radius: 4px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border: 1px solid rgba(255, 255, 255, 0.6);
+              margin-top: 8px;
+              font-family: PingFang SC, PingFang SC;
+              font-weight: 500;
+              font-size: 12px;
+              color: #ffffff;
+              line-height: 18px;
             }
             .preview-box {
               padding: 0 5px;

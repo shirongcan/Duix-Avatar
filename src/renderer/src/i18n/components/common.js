@@ -69,7 +69,19 @@ export const commonZh = {
     emptyRightText: '开始制作模特',
     inProgressText: '训练中',
     createVideoText: '做视频',
-    previewText: '预览'
+    previewText: '预览',
+    voiceCalibrateText: '声音校准'
+  },
+  referenceTextDialog: {
+    headerTitle: '声音校准',
+    playText: '试听参考音频',
+    stopText: '停止播放',
+    tip: '这里的文本是训练视频语音的识别结果，生成声音时它会和参考音频一起作为音色样本。请把它修改为与参考音频完全一致的文字，可提升后续生成声音的准确度。',
+    placeholder: '请输入与参考音频一致的文字…',
+    segmentLabel: '参考音频片段',
+    segmentPlayText: '试听本段',
+    cancelText: '取消',
+    saveText: '保存'
   },
   deleteDialog: {
     buttonTextLeft: '取消',
@@ -262,7 +274,19 @@ export const commonEn = {
     emptyRightText: 'to start making a Avatar.',
     inProgressText: 'In Progress',
     createVideoText: 'Create Video',
-    previewText: 'Preview'
+    previewText: 'Preview',
+    voiceCalibrateText: 'Voice Calibration'
+  },
+  referenceTextDialog: {
+    headerTitle: 'Voice Calibration',
+    playText: 'Listen to Reference Audio',
+    stopText: 'Stop',
+    tip: 'This text is the speech recognition result of your training video. It is used with the reference audio as the voice sample when generating speech. Please correct it to exactly match the reference audio to improve the accuracy of future generated voices.',
+    placeholder: 'Enter the exact text of the reference audio…',
+    segmentLabel: 'Reference Audio Segment',
+    segmentPlayText: 'Listen to this segment',
+    cancelText: 'Cancel',
+    saveText: 'Save'
   },
   deleteDialog: {
     buttonTextLeft: 'Cancel',

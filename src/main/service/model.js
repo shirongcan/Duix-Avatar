@@ -4,6 +4,7 @@ import path from 'path'
 import dayjs from 'dayjs'
 import { isEmpty } from 'lodash'
 import { insert, selectPage, count, selectByID, remove as deleteModel } from '../dao/f2f-model.js'
+import { selectByID as selectVoiceByID } from '../dao/voice.js'
 import { train as trainVoice } from './voice.js'
 import { assetPath } from '../config/config.js'
 import log from '../logger.js'
@@ -60,20 +61,28 @@ function page({ page, pageSize, name = '' }) {
   const total = count(name)
   return {
     total,
-    list: selectPage({ page, pageSize, name }).map((model) => ({
-      ...model,
-      video_path: path.join(assetPath.model, model.video_path),
-      audio_path: path.join(assetPath.ttsRoot, model.audio_path)
-    }))
+    list: selectPage({ page, pageSize, name }).map((model) => {
+      const voice = model.voice_id ? selectVoiceByID(model.voice_id) : null
+      return {
+        ...model,
+        video_path: path.join(assetPath.model, model.video_path),
+        audio_path: path.join(assetPath.ttsRoot, model.audio_path),
+        reference_audio_text: voice?.reference_audio_text || '',
+        reference_audio_url: resolveReferenceAudio(voice)
+      }
+    })
   }
 }
 
 function findModel(modelId) {
   const model = selectByID(modelId)
+  const voice = model.voice_id ? selectVoiceByID(model.voice_id) : null
   return {
     ...model,
     video_path: path.join(assetPath.model, model.video_path),
-    audio_path: path.join(assetPath.ttsRoot, model.audio_path)
+    audio_path: path.join(assetPath.ttsRoot, model.audio_path),
+    reference_audio_text: voice?.reference_audio_text || '',
+    reference_audio_url: resolveReferenceAudio(voice)
   }
 }
 
@@ -98,6 +107,23 @@ function removeModel(modelId) {
 
 function countModel(name = '') {
   return count(name)
+}
+
+/**
+ * 参考音频可能位于两个位置：
+ * 1. 预处理产物 format_<原始文件名>.wav（服务端预处理时生成，通常保留在磁盘）
+ * 2. 原始分离音频 <原始文件名>.wav（可能已被清理）
+ * 优先返回实际存在的文件，用于前端试听。
+ */
+function resolveReferenceAudio(voice) {
+  const origin = voice?.origin_audio_path || ''
+  if (!origin) return ''
+  const parsed = path.parse(origin)
+  const candidates = [
+    path.join(assetPath.ttsRoot, parsed.dir, `format_${parsed.base}`),
+    path.join(assetPath.ttsRoot, parsed.dir, parsed.base)
+  ]
+  return candidates.find((candidate) => fs.existsSync(candidate)) || ''
 }
 
 export function init() {

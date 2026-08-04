@@ -29,3 +29,10 @@ export function selectByID(id) {
   const row = stmt.get(id)
   return row
 }
+
+export function updateReferenceText(id, reference_audio_text) {
+  const db = connect()
+  const stmt = db.prepare('UPDATE voice SET reference_audio_text = ? WHERE id = ?')
+  const info = stmt.run(reference_audio_text, id)
+  return info.changes > 0
+}

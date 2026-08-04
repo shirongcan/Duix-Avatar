@@ -1,17 +1,105 @@
-import { selectAll, insert, selectByID } from '../dao/voice.js'
+import { selectAll, insert, selectByID, updateReferenceText as updateReferenceTextDao } from '../dao/voice.js'
 import { preprocessAndTran, makeAudio as makeAudioApi } from '../api/tts.js'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import { execFile } from 'child_process'
 import { assetPath } from '../config/config.js'
 import log from '../logger.js'
 import { ipcMain } from 'electron'
 import dayjs from 'dayjs'
 
 const MODEL_NAME = 'voice'
+const TTS_CONTAINER = process.env.HEYGEM_TTS_CONTAINER || 'duix-avatar-tts'
+
+function runDockerCat(containerPath, timeoutMilliseconds = 60000) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'docker',
+      ['exec', TTS_CONTAINER, 'cat', containerPath],
+      { encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, timeout: timeoutMilliseconds },
+      (error, stdout) => {
+        if (error) reject(error)
+        else resolve(stdout)
+      }
+    )
+  })
+}
+
+function resolveSessionsCacheRoot() {
+  return path.resolve(assetPath.ttsRoot, '..', 'sessions_cache')
+}
+
+/**
+ * 将服务端容器内的参考音频路径映射为宿主机路径。
+ * - /code/data/... 直接映射到 D:\duix_avatar_data\voice\data\...
+ * - /code/sessions/... 映射到 voice\sessions_cache\...，不存在时用 docker exec cat 拷出缓存
+ */
+async function resolveReferenceAudioHostPath(containerPath) {
+  if (containerPath.startsWith('/code/data/')) {
+    const hostPath = path.join(assetPath.ttsRoot, containerPath.replace('/code/data/', ''))
+    return fs.existsSync(hostPath) ? hostPath : ''
+  }
+  if (containerPath.startsWith('/code/sessions/')) {
+    const relative = containerPath.replace('/code/sessions/', '')
+    const hostPath = path.join(resolveSessionsCacheRoot(), relative)
+    if (fs.existsSync(hostPath)) return hostPath
+    try {
+      fs.mkdirSync(path.dirname(hostPath), { recursive: true })
+      const content = await runDockerCat(containerPath)
+      fs.writeFileSync(hostPath, content, 'binary')
+      return hostPath
+    } catch (error) {
+      log.warn('无法从 TTS 容器获取参考音频分片:', error.message)
+      return ''
+    }
+  }
+  return ''
+}
+
+/**
+ * 返回该音色的参考音频分片列表（与参考文本分段一一对应），供逐段试听。
+ */
+export async function referenceAudioParts(voiceId) {
+  const voice = selectByID(voiceId)
+  if (!voice) return { parts: [], fullAudio: '' }
+  const partPaths = (voice.asr_format_audio_url || '')
+    .split('|||')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  const parts = []
+  for (const containerPath of partPaths) {
+    parts.push({
+      available: true,
+      path: await resolveReferenceAudioHostPath(containerPath)
+    })
+  }
+
+  // 整段去噪音频（宿主机通常存在），作为兜底
+  const origin = voice.origin_audio_path || ''
+  const parsedOrigin = path.parse(origin)
+  const fullAudio = parsedOrigin.base
+    ? path.join(assetPath.ttsRoot, parsedOrigin.dir, `format_denoise_${parsedOrigin.base}`)
+    : ''
+  return {
+    parts: parts.map((part) => ({
+      ...part,
+      available: part.available && Boolean(part.path)
+    })),
+    fullAudio: fs.existsSync(fullAudio) ? fullAudio : ''
+  }
+}
 
 export function getAllTimbre() {
   return selectAll()
+}
+
+export function updateReferenceText(voiceId, referenceAudioText) {
+  if (!voiceId || referenceAudioText === undefined || referenceAudioText === null) {
+    return false
+  }
+  return updateReferenceTextDao(voiceId, String(referenceAudioText))
 }
 
 export async function train(path, lang = 'zh') {
@@ -94,5 +182,11 @@ export async function audition(voiceId, text) {
 export function init() {
   ipcMain.handle(MODEL_NAME + '/audition', (event, ...args) => {
     return audition(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/updateReferenceText', (event, ...args) => {
+    return updateReferenceText(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/referenceAudioParts', (event, ...args) => {
+    return referenceAudioParts(...args)
   })
 }
