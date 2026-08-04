@@ -1,5 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg'
 import path from 'path'
+import { app } from 'electron'
 import log from '../logger.js'
 
 function initFFmpeg() {
@@ -25,12 +26,9 @@ function initFFmpeg() {
     )
   }
 
-  if(process.env.NODE_ENV === undefined){
-    process.env.NODE_ENV = 'production'
-  }
-
-  const ffmpegPathValue = ffmpegPath[`${process.env.NODE_ENV}-${process.platform}`]
-  log.debug('ENV:', `${process.env.NODE_ENV}-${process.platform}`)
+  const runtimeEnvironment = app.isPackaged ? 'production' : 'development'
+  const ffmpegPathValue = ffmpegPath[`${runtimeEnvironment}-${process.platform}`]
+  log.debug('ENV:', `${runtimeEnvironment}-${process.platform}`)
   log.info('FFmpeg path:', ffmpegPathValue)
   ffmpeg.setFfmpegPath(ffmpegPathValue)
 
@@ -56,7 +54,7 @@ function initFFmpeg() {
     )
   }
 
-  const ffprobePathValue = ffprobePath[`${process.env.NODE_ENV}-${process.platform}`]
+  const ffprobePathValue = ffprobePath[`${runtimeEnvironment}-${process.platform}`]
   log.info('FFprobe path:', ffprobePathValue)
   ffmpeg.setFfprobePath(ffprobePathValue)
 }
