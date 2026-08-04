@@ -12,7 +12,12 @@
               <Select class="content-left" v-model="state.select" @query="action.queryModelList" />
             </t-col>
             <t-col :flex="4.5">
-              <Preview class="content-center" :model="state.select.model" />
+              <Preview
+                class="content-center"
+                :model="state.select.model"
+                :subtitle="state.select.subtitle"
+                :text="state.select.text"
+              />
             </t-col>
             <t-col :flex="5.0">
               <Edit class="content-right" v-model="state.select" />
@@ -39,6 +44,9 @@ import { saveVideo, makeVideo, findModel, findVideo, modelPage } from '@renderer
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
+import { Client } from '@renderer/client'
+import { millisecondsToTime } from '@renderer/utils'
+import { inheritRevisionSubtitleStyle } from '@renderer/utils/video-revision.js'
 const { t } = useI18n()
 
 const route = useRoute()
@@ -48,6 +56,8 @@ const modalFinished = ref()
 
 const state = reactive({
   initLoading: false,
+  sourceVideoId: '',
+  sourceVoiceId: '',
   video: {
     id: '',
     name: `${t('common.modelCreateView.videoName')}${new Date().toLocaleString().replace(/\/|:| /g, '')}`
@@ -58,6 +68,16 @@ const state = reactive({
     text: '',
     modelList: [],
     uploaded: null,
+    subtitle: {
+      enabled: false,
+      burnEnabled: false,
+      fontSize: 42,
+      textColor: '#FFFFFF',
+      outlineColor: '#000000',
+      outlineWidth: 3,
+      position: 'bottom',
+      verticalOffset: 0
+    }
   }
 })
 
@@ -65,13 +85,14 @@ const action = {
   async init() {
     state.initLoading = true
     try {
-      const { videoId, modelId } = route.query
+      const { videoId, sourceVideoId, modelId } = route.query
+      state.sourceVideoId = sourceVideoId || ''
 
       action.initWatchs()
 
       // 初始化视频详情
-      if (videoId) {
-        await action.initVideoDetail(videoId)
+      if (videoId || sourceVideoId) {
+        await action.initVideoDetail(videoId || sourceVideoId, Boolean(sourceVideoId))
       }
 
       // 初始化模特列表
@@ -89,6 +110,11 @@ const action = {
 
       if (state.select.model.id) {
         await action.initModelDetail(state.select.model.id)
+      }
+
+      if (state.sourceVoiceId) {
+        const sourceSpeaker = state.select.modelList.find((item) => item.voice_id == state.sourceVoiceId)
+        if (sourceSpeaker) state.select.speaker = sourceSpeaker
       }
 
       // 选中的模特滚动到中间
@@ -134,13 +160,33 @@ const action = {
     const target = document.querySelector(`div[model-id="${state.select.model.id}"]`)
     target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   },
-  async initVideoDetail(videoId) {
+  async initVideoDetail(videoId, isRevision = false) {
     const videoDetail = await findVideo(videoId)
     if (videoDetail) {
-      state.video.id = videoDetail.id
-      state.video.name = videoDetail.name
-      state.select.text = videoDetail.text_content
+      state.video.id = isRevision ? '' : videoDetail.id
+      state.video.name = isRevision
+        ? `${videoDetail.name}${t('common.editView.revisionNameSuffix')}`
+        : videoDetail.name
+      state.select.text = videoDetail.text_content || ''
       state.select.model.id = videoDetail.model_id
+      state.sourceVoiceId = videoDetail.voice_id || ''
+      if (videoDetail.audio_source === 'upload' && videoDetail.audio_path) {
+        const info = await Client.file.getAudioInfo(videoDetail.audio_path)
+        state.select.uploaded = {
+          name: info?.name || videoDetail.audio_path.split(/[\\/]/).pop(),
+          audioUrl: videoDetail.audio_path,
+          duration: info?.duration ? millisecondsToTime(info.duration * 1000) : '--:--'
+        }
+      }
+      try {
+        let subtitleStyle = typeof videoDetail.subtitle_style === 'string'
+          ? JSON.parse(videoDetail.subtitle_style)
+          : videoDetail.subtitle_style
+        if (isRevision) subtitleStyle = inheritRevisionSubtitleStyle(subtitleStyle)
+        if (subtitleStyle) Object.assign(state.select.subtitle, subtitleStyle)
+      } catch (error) {
+        console.warn('字幕设置读取失败', error)
+      }
     }
   },
   async initModelDetail(modelId) {
@@ -193,9 +239,21 @@ const action = {
 
     const saveId = await saveVideo({
       id: video.id,
+      source_video_id: state.sourceVideoId || undefined,
+      audio_source: select.uploaded ? 'upload' : 'tts',
       model_id: select.model.id,
       name: video.name,
       text_content: select.text,
+      subtitle_style: {
+        enabled: Boolean((select.subtitle.enabled || select.subtitle.burnEnabled) && select.text?.trim()),
+        burnEnabled: Boolean(select.subtitle.burnEnabled && select.text?.trim()),
+        fontSize: Number(select.subtitle.fontSize),
+        textColor: String(select.subtitle.textColor),
+        outlineColor: String(select.subtitle.outlineColor),
+        outlineWidth: Number(select.subtitle.outlineWidth),
+        position: String(select.subtitle.position),
+        verticalOffset: Number(select.subtitle.verticalOffset || 0)
+      },
       ...sumitAudio
     })
     return video.id || saveId

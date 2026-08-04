@@ -1,5 +1,14 @@
 <template>
   <div class="upload">
+    <div class="upload-script">
+      <div class="upload-script-label">{{ $t('common.editView.audioScriptOptional') }}</div>
+      <t-textarea
+        v-model="select.text"
+        :placeholder="$t('common.editView.audioScriptPlaceholder')"
+        :autosize="{ minRows: 4, maxRows: 8 }"
+      />
+      <div class="upload-script-tip">{{ $t('common.editView.audioScriptTip') }}</div>
+    </div>
     <div class="upload-uploaded" v-if="select.uploaded">
       <div class="info">
         <div class="tag">{{ $t('common.editView.upload') }}</div>
@@ -98,6 +107,23 @@ const action = {
 </script>
 <style lang="less" scoped>
 .upload {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  &-script {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    &-label { color: #fff; font-size: 13px; font-weight: 500; }
+    &-tip { color: rgba(255, 255, 255, .5); font-size: 11px; line-height: 16px; }
+
+    :deep(textarea) {
+      color: #fff;
+      background: #161718;
+    }
+  }
 
   &-box {
     display: flex;

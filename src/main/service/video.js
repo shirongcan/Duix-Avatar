@@ -15,10 +15,149 @@ import {
 } from '../dao/video.js'
 import { makeAudio4Video, copyAudio4Video } from './voice.js'
 import { makeVideo as makeVideoApi,getVideoStatus } from '../api/f2f.js'
+import { transcribePcmWithTimestamps } from '../api/asr.js'
 import log from '../logger.js'
-import { getVideoDuration } from '../util/ffmpeg.js'
+import {
+  burnAssSubtitles,
+  convertAudioToAsrPcm,
+  detectSpeechIntervals,
+  getVideoDuration
+} from '../util/ffmpeg.js'
+import { createAss, createSrtFromCues, normalizeSubtitleStyle } from '../util/subtitle.js'
+import { resolveVideoSaveSource } from '../util/video-revision.js'
 
 const MODEL_NAME = 'video'
+
+function parseJSON(value, fallback = null) {
+  if (!value) return fallback
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    log.warn('invalid JSON value:', error.message)
+    return fallback
+  }
+}
+
+function absoluteVideoPath(filePath) {
+  if (!filePath) return ''
+  // The synthesis service historically stores managed files as `/name.mp4`.
+  // On Windows that is drive-root-relative, not an external absolute path.
+  if (/^[\\/](?![\\/])/.test(filePath)) {
+    return path.join(assetPath.model, filePath.replace(/^[\\/]+/, ''))
+  }
+  return path.isAbsolute(filePath) ? filePath : path.join(assetPath.model, filePath)
+}
+
+function relativeVideoPath(filePath) {
+  return filePath ? path.relative(assetPath.model, filePath) : null
+}
+
+function isManagedVideoPath(filePath) {
+  const root = path.resolve(assetPath.model)
+  const target = path.resolve(filePath)
+  return target.startsWith(`${root}${path.sep}`)
+}
+
+function exposeVideoPaths(video) {
+  if (!video) return video
+  const cleanPath = video.clean_file_path || video.file_path
+  return {
+    ...video,
+    file_path: absoluteVideoPath(video.file_path),
+    clean_file_path: absoluteVideoPath(cleanPath),
+    subtitled_file_path: absoluteVideoPath(video.subtitled_file_path)
+  }
+}
+
+function exposeVideoForEdit(video) {
+  if (!video) return video
+  return {
+    ...exposeVideoPaths(video),
+    audio_path: video.audio_path ? absoluteVideoPath(video.audio_path) : '',
+    audio_source: video.voice_id ? 'tts' : 'upload'
+  }
+}
+
+function subtitleRequested(video) {
+  const style = normalizeSubtitleStyle(parseJSON(video?.subtitle_style, {}))
+  return Boolean(style.enabled && style.burnEnabled && video?.text_content?.trim())
+}
+
+async function getSubtitleAsrTiming(video) {
+  const audioName = video?.audio_path
+  if (!audioName) return null
+  const audioPath = path.join(assetPath.model, audioName)
+  if (!fs.existsSync(audioPath)) return null
+  const parsedPath = path.parse(audioPath)
+  const pcmPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitle-asr.pcm`)
+  try {
+    await convertAudioToAsrPcm(audioPath, pcmPath)
+    return await transcribePcmWithTimestamps(pcmPath)
+  } catch (error) {
+    log.warn('Unable to recognize subtitle timing, using silence-based fallback:', error.message)
+    return null
+  } finally {
+    try {
+      fs.rmSync(pcmPath, { force: true })
+    } catch (error) {
+      log.warn('Unable to remove temporary ASR audio:', error.message)
+    }
+  }
+}
+
+async function resolveSubtitleCues(video, inputPath, options = {}) {
+  const duration = Number(video.duration) || Number(await getVideoDuration(inputPath))
+  let speechIntervals = []
+  try {
+    speechIntervals = await detectSpeechIntervals(inputPath)
+  } catch (error) {
+    log.warn('Unable to detect speech intervals, using estimated subtitle timing:', error.message)
+  }
+  const cachedTiming = options.ignoreCached ? null : parseJSON(video.subtitle_timing, null)
+  const asrTiming = await getSubtitleAsrTiming(video)
+  const style = normalizeSubtitleStyle(parseJSON(video?.subtitle_style, {}))
+  return createAss(
+    video.text_content,
+    duration,
+    style,
+    speechIntervals,
+    cachedTiming,
+    asrTiming
+  )
+}
+
+export async function renderVideoSubtitles(video, inputPath, outputPath) {
+  const style = normalizeSubtitleStyle(parseJSON(video?.subtitle_style, {}))
+  if (!style.enabled || !style.burnEnabled || !video?.text_content?.trim()) return null
+  const { content, cues } = await resolveSubtitleCues(video, inputPath)
+  const assPath = path.join(path.dirname(outputPath), `${path.parse(outputPath).name}.${crypto.randomUUID()}.ass`)
+  try {
+    fs.writeFileSync(assPath, `\ufeff${content}`, 'utf8')
+    await burnAssSubtitles(inputPath, outputPath, assPath)
+    return cues
+  } finally {
+    try {
+      fs.rmSync(assPath, { force: true })
+    } catch (error) {
+      log.warn('Unable to remove temporary subtitle file:', error.message)
+    }
+  }
+}
+
+async function exportVideoSrt(videoId, outputPath) {
+  const video = selectVideoByID(videoId)
+  if (!video) throw new Error('找不到指定的视频作品')
+  const style = normalizeSubtitleStyle(parseJSON(video?.subtitle_style, {}))
+  if (!style.enabled || !video?.text_content?.trim()) throw new Error('该作品没有可导出的字幕')
+  const sourcePath = video.clean_file_path || video.file_path
+  if (!sourcePath) throw new Error('视频尚未生成，无法导出字幕')
+  const videoPath = absoluteVideoPath(sourcePath)
+  if (!fs.existsSync(videoPath)) throw new Error('找不到视频文件')
+  const { cues } = await resolveSubtitleCues(video, videoPath, { ignoreCached: true })
+  fs.writeFileSync(outputPath, `\ufeff${createSrtFromCues(cues)}`, 'utf8')
+  return outputPath
+}
 
 /**
  * 分页查询合成结果
@@ -31,10 +170,7 @@ function page({ page, pageSize, name = '' }) {
   const waitingVideos = selectByStatus('waiting').map((v) => v.id)
   const total = count(name)
   const list = selectPage({ page, pageSize, name }).map((video) => {
-    video = {
-      ...video,
-      file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
-    }
+    video = exposeVideoPaths(video)
 
     if(video.status === 'waiting'){
       video.progress = `${waitingVideos.indexOf(video.id) + 1} / ${waitingVideos.length}`
@@ -49,27 +185,62 @@ function page({ page, pageSize, name = '' }) {
 }
 
 function findVideo(videoId) {
-  const video = selectVideoByID(videoId)
-  return {
-    ...video,
-    file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
-  }
+  return exposeVideoForEdit(selectVideoByID(videoId))
 }
 
 function countVideo(name = '') {
   return count(name)
 }
 
-function saveVideo({ id, model_id, name, text_content, voice_id, audio_path }) {
-  const video = selectVideoByID(id)
-  if(audio_path){
-    audio_path = copyAudio4Video(audio_path)
+function saveVideo({
+  id,
+  source_video_id,
+  audio_source = 'tts',
+  model_id,
+  name,
+  text_content,
+  voice_id,
+  audio_path,
+  subtitle_style
+}) {
+  const sourceVideo = source_video_id ? selectVideoByID(source_video_id) : null
+  const resolvedSource = resolveVideoSaveSource(
+    { id, source_video_id, audio_source, audio_path },
+    sourceVideo,
+    absoluteVideoPath
+  )
+
+  if (resolvedSource.audioSource === 'upload') {
+    audio_path = copyAudio4Video(resolvedSource.audioPath)
+    voice_id = null
+  } else {
+    audio_path = null
   }
 
+  const video = selectVideoByID(id)
+
   if (video) {
-    return update({ id, model_id, name, text_content, voice_id, audio_path })
+    return update({
+      id,
+      model_id,
+      name,
+      text_content,
+      voice_id,
+      audio_path,
+      subtitle_style: normalizeSubtitleStyle(subtitle_style),
+      subtitle_timing: null
+    })
   }
-  return insertVideo({ model_id, name, status: 'draft', text_content, voice_id, audio_path })
+  return insertVideo({
+    model_id,
+    name,
+    status: 'draft',
+    text_content,
+    voice_id,
+    audio_path,
+    subtitle_style: normalizeSubtitleStyle(subtitle_style),
+    subtitle_render_status: 'not_requested'
+  })
 }
 
 /**
@@ -85,9 +256,18 @@ function makeVideo(videoId) {
 
 export async function synthesisVideo(videoId) {
   try{
+    const previousVideo = selectVideoByID(videoId)
+    const previousSubtitlePath = absoluteVideoPath(previousVideo?.subtitled_file_path)
+    if (previousSubtitlePath && isManagedVideoPath(previousSubtitlePath)) {
+      fs.rmSync(previousSubtitlePath, { force: true })
+    }
     update({
       id: videoId,
       file_path: null,
+      clean_file_path: null,
+      subtitled_file_path: null,
+      subtitle_render_status: 'not_requested',
+      subtitle_render_message: null,
       status: 'pending',
       message: '正在提交任务',
     })
@@ -133,6 +313,8 @@ export async function synthesisVideo(videoId) {
       update({
         id: videoId,
         file_path: null,
+        clean_file_path: null,
+        subtitled_file_path: null,
         status: 'pending',
         message: result,
         audio_path: audioPath,
@@ -192,14 +374,55 @@ export async function loopPending() {
         duration = await getVideoDuration(resultPath)
       }
 
-      update({
+      const cleanRelativePath = statusRes.data.result
+      const cleanAbsolutePath = path.join(assetPath.model, cleanRelativePath)
+      const baseUpdate = {
         id: video.id,
         status: 'success',
         message: statusRes.data.msg,
         progress: statusRes.data.progress,
-        file_path: statusRes.data.result,
+        file_path: cleanRelativePath,
+        clean_file_path: cleanRelativePath,
+        subtitled_file_path: null,
+        subtitle_render_status: 'not_requested',
+        subtitle_render_message: null,
         duration
-      })
+      }
+
+      if (subtitleRequested(video)) {
+        const parsedPath = path.parse(cleanAbsolutePath)
+        const subtitledAbsolutePath = path.join(parsedPath.dir, `${parsedPath.name}.subtitled.mp4`)
+        try {
+          update({
+            id: video.id,
+            message: '正在烧录字幕',
+            subtitle_render_status: 'pending',
+            subtitle_render_message: null
+          })
+          const cues = await renderVideoSubtitles({ ...video, duration }, cleanAbsolutePath, subtitledAbsolutePath)
+          update({
+            ...baseUpdate,
+            file_path: relativeVideoPath(subtitledAbsolutePath),
+            subtitled_file_path: relativeVideoPath(subtitledAbsolutePath),
+            subtitle_timing: cues,
+            subtitle_render_status: 'success'
+          })
+        } catch (error) {
+          try {
+            fs.rmSync(subtitledAbsolutePath, { force: true })
+          } catch (cleanupError) {
+            log.warn('Unable to remove failed subtitle output:', cleanupError.message)
+          }
+          log.error('subtitle burn-in failed:', error.message)
+          update({
+            ...baseUpdate,
+            subtitle_render_status: 'failed',
+            subtitle_render_message: error.message
+          })
+        }
+      } else {
+        update(baseUpdate)
+      }
 
     } else if (statusRes.data.status === 3) {
       updateStatus(video.id, 'failed', statusRes.data.msg)
@@ -229,9 +452,18 @@ function removeVideo(videoId) {
   log.debug('~ removeVideo ~ videoId:', videoId)
 
   // 删除视频
-  const videoPath = path.join(assetPath.model, video.file_path ||'')
-  if (!isEmpty(video.file_path) && fs.existsSync(videoPath)) {
-    fs.unlinkSync(videoPath)
+  const videoPaths = new Set([
+    video.file_path,
+    video.clean_file_path,
+    video.subtitled_file_path
+  ].filter((filePath) => !isEmpty(filePath)))
+  for (const filePath of videoPaths) {
+    const videoPath = absoluteVideoPath(filePath)
+    if (!isManagedVideoPath(videoPath)) {
+      log.warn('Skipping video deletion outside managed directory:', videoPath)
+      continue
+    }
+    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath)
   }
 
   // 删除音频
@@ -244,10 +476,58 @@ function removeVideo(videoId) {
   return deleteVideo(videoId)
 }
 
-function exportVideo(videoId, outputPath) {
+function exportVideo(videoId, outputPath, variant = 'default') {
   const video = selectVideoByID(videoId)
-  const filePath = path.join(assetPath.model, video.file_path)
+  const selectedPath = variant === 'clean'
+    ? video.clean_file_path || video.file_path
+    : variant === 'subtitled'
+      ? video.subtitled_file_path
+      : video.file_path
+  if (!selectedPath) throw new Error('所选视频版本尚不可用')
+  const filePath = absoluteVideoPath(selectedPath)
+  if (!fs.existsSync(filePath)) throw new Error('找不到所选视频文件')
   fs.copyFileSync(filePath, outputPath)
+}
+
+async function retrySubtitle(videoId) {
+  const video = selectVideoByID(videoId)
+  if (!video) throw new Error('找不到指定的视频作品')
+  const subtitleStyle = normalizeSubtitleStyle(parseJSON(video.subtitle_style, {}))
+  if (!subtitleStyle.enabled || !video.text_content?.trim()) throw new Error('该作品未启用字幕')
+  subtitleStyle.burnEnabled = true
+  const cleanPath = absoluteVideoPath(video.clean_file_path || video.file_path)
+  if (!cleanPath || !fs.existsSync(cleanPath)) throw new Error('找不到无字幕版视频')
+  if (!isManagedVideoPath(cleanPath)) throw new Error('无字幕版不在受管理的视频目录中')
+  const parsedPath = path.parse(cleanPath)
+  const outputPath = path.join(parsedPath.dir, `${parsedPath.name}.subtitled.mp4`)
+  const cleanRelativePath = relativeVideoPath(cleanPath)
+  update({
+    id: videoId,
+    file_path: cleanRelativePath,
+    clean_file_path: cleanRelativePath,
+    subtitled_file_path: null,
+    subtitle_render_status: 'pending',
+    subtitle_render_message: null,
+    subtitle_style: subtitleStyle
+  })
+  try {
+    fs.rmSync(outputPath, { force: true })
+    const cues = await renderVideoSubtitles({ ...video, subtitle_style: subtitleStyle }, cleanPath, outputPath)
+    const relativePath = relativeVideoPath(outputPath)
+    update({
+      id: videoId,
+      file_path: relativePath,
+      subtitled_file_path: relativePath,
+      subtitle_timing: cues,
+      subtitle_render_status: 'success',
+      subtitle_render_message: null
+    })
+    return exposeVideoPaths(selectVideoByID(videoId))
+  } catch (error) {
+    fs.rmSync(outputPath, { force: true })
+    update({ id: videoId, subtitle_render_status: 'failed', subtitle_render_message: error.message })
+    throw error
+  }
 }
 
 /**
@@ -295,6 +575,12 @@ export function init() {
   })
   ipcMain.handle(MODEL_NAME + '/export', (event, ...args) => {
     return exportVideo(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/export-subtitle', (event, ...args) => {
+    return exportVideoSrt(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/retry-subtitle', (event, ...args) => {
+    return retrySubtitle(...args)
   })
   ipcMain.handle(MODEL_NAME + '/remove', (event, ...args) => {
     return removeVideo(...args)

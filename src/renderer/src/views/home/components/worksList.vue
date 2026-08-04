@@ -35,6 +35,12 @@
               <div v-if="item.status === 'success'" class="works-video">
                  <video :src="localUrl.addFileProtocol(item.file_path)"></video>
               </div>
+              <div v-if="item.subtitle_render_status === 'success'" class="version-badge">
+                {{ $t('common.videoList.dualVersionsReady') }}
+              </div>
+              <div v-else-if="item.subtitle_render_status === 'failed'" class="version-badge failed">
+                {{ $t('common.videoList.subtitleFailed') }}
+              </div>
               <!--  <video class="works-video" src="../../../assets/images/home/aa.mp4"></video> -->
               <img
                 v-if="item.status === 'failed' || item.status === 'pending' || item.status === 'draft'"
@@ -64,18 +70,36 @@
               <div
                 v-if="item.status === 'success'"
                 class="preview-button"
-                @click="previewVideo(item.file_path)"
+                @click="previewVideo(item)"
               >
                 <img src="../../../assets/images/home/video.svg" />
-                <span>{{ $t('common.videoList.previewTitle') }}</span>
+                <span>{{ item.subtitled_file_path ? $t('common.videoList.selectPreviewVersion') : $t('common.videoList.previewTitle') }}</span>
               </div>
               <div
                 v-if="item.status === 'success'"
                 class="download-button"
-                @click="downloadVideo(item)"
+                @click="downloadVideo(item, 'clean')"
               >
                 <img src="../../../assets/images/home/icon-down.svg" />
-                <span>{{ $t('common.videoList.downloadTitle') }}</span>
+                <span>{{ $t('common.videoList.downloadClean') }}</span>
+              </div>
+              <div
+                v-if="['success', 'failed', 'draft'].includes(item.status)"
+                class="edit-copy-button"
+                @click="editCopy(item)"
+              >
+                {{ $t('common.videoList.editCopy') }}
+              </div>
+              <div v-if="item.status === 'success' && item.subtitled_file_path" class="download-button secondary-download" @click="downloadVideo(item, 'subtitled')">
+                <img src="../../../assets/images/home/icon-down.svg" />
+                <span>{{ $t('common.videoList.downloadSubtitled') }}</span>
+              </div>
+              <div v-if="canExportSubtitleSrt(item)" class="download-button secondary-download" @click="downloadSrt(item)">
+                <img src="../../../assets/images/home/icon-down.svg" />
+                <span>{{ $t('common.videoList.exportSubtitleTitle') }}</span>
+              </div>
+              <div v-if="canGenerateSubtitle(item)" class="retry-button" @click="retrySubtitle(item)">
+                {{ item.subtitle_render_status === 'failed' ? $t('common.videoList.retrySubtitle') : $t('common.videoList.generateSubtitle') }}
               </div>
               <div v-if="item.status === 'failed'" class="detection-failed-text">
                 {{ $t('common.videoList.makeFailedText') }}
@@ -148,7 +172,8 @@
     </div>
     <VideoDialog
       :showVideoDialog="state.showVideoDialog"
-      :videoUrl="state.videoUrl"
+      :cleanUrl="state.previewCleanUrl"
+      :subtitledUrl="state.previewSubtitledUrl"
       @cancel="cancelFun"
     />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
@@ -157,7 +182,7 @@
 <script setup>
 import { reactive, onMounted, onBeforeUnmount, ref } from 'vue'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
-import { videoPage, exportVideo, removeVideo } from '@renderer/api/index.js'
+import { videoPage, exportVideo, exportVideoSrt, removeVideo, retryVideoSubtitle } from '@renderer/api/index.js'
 import { formatDate, millisecondsToTime } from '@renderer/utils/index.js'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
 import { Client } from '@renderer/client'
@@ -170,6 +195,7 @@ import zhConfig from 'tdesign-vue-next/es/locale/zh_CN'
 import { useI18n } from 'vue-i18n'
 const { locale, t } = useI18n()
 import { localUrl } from '@renderer/utils'
+import { canExportSubtitleSrt, canGenerateSubtitle } from '@renderer/utils/video-revision.js'
 
 import merge from 'lodash/merge'
 const globalEn = merge(enConfig, {
@@ -184,7 +210,8 @@ const deleteDialogRef = ref(null)
 const state = reactive({
   interval: null,
   current: 1,
-  videoUrl: '',
+  previewCleanUrl: '',
+  previewSubtitledUrl: '',
   showVideoDialog: false,
   pageSize: 10,
   total: 0,
@@ -210,9 +237,10 @@ const cancelFun = () => {
 const linkRoute = () => {
   router.push('/video/edit')
 }
-const previewVideo = (url) => {
+const previewVideo = (video) => {
   state.showVideoDialog = true
-  state.videoUrl = url
+  state.previewCleanUrl = video.clean_file_path || video.file_path
+  state.previewSubtitledUrl = video.subtitled_file_path || ''
 }
 const videoPageAJax = async () => {
   try {
@@ -271,19 +299,48 @@ const okDelete = () => {
       console.error('Error:', error)
     })
 }
-const downloadVideo = async (video) => {
-  const fileExtension = video.file_path?.split('.')?.pop()
-  const saveName = `${video.name}.${fileExtension}`
+const downloadVideo = async (video, variant) => {
+  const sourcePath = variant === 'subtitled' ? video.subtitled_file_path : video.clean_file_path || video.file_path
+  const fileExtension = sourcePath?.split('.')?.pop() || 'mp4'
+  const suffix = variant === 'subtitled' ? t('common.videoList.previewSubtitled') : t('common.videoList.previewClean')
+  const saveName = `${video.name}-${suffix}.${fileExtension}`
   // exportVideo
   try {
     const savePath = await Client.file.saveFile(saveName)
     try {
-      const res = await exportVideo(video.id, savePath)
+      await exportVideo(video.id, savePath, variant)
     } catch (error) {
       console.log(error)
     }
   } catch (error) {
     console.log(error)
+  }
+}
+const downloadSrt = async (video) => {
+  try {
+    const savePath = await Client.file.saveFile(`${video.name}.srt`)
+    if (!savePath) return
+    await exportVideoSrt(video.id, savePath)
+    MessagePlugin.success(t('common.videoList.exportSubtitleSuccess'))
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.exportSubtitleFailed')}: ${error?.message || error}`)
+  }
+}
+const editCopy = (video) => {
+  const queryKey = video.status === 'draft' ? 'videoId' : 'sourceVideoId'
+  router.push({ path: '/video/edit', query: { [queryKey]: video.id } })
+}
+
+const retrySubtitle = async (video) => {
+  try {
+    MessagePlugin.info(t('common.videoList.retryingSubtitle'))
+    await retryVideoSubtitle(video.id)
+    await videoPageAJax()
+    MessagePlugin.success(t('common.videoList.retrySubtitleSuccess'))
+  } catch (error) {
+    console.error(error)
+    MessagePlugin.error(`${t('common.videoList.retrySubtitleFailed')}: ${error?.message || error}`)
   }
 }
 </script>
@@ -349,7 +406,7 @@ const downloadVideo = async (video) => {
 
           .download-preview-content {
             .download-button {
-              width: 90px;
+              width: 118px;
               height: 30px;
               cursor: pointer;
               background: #434af9;
@@ -368,6 +425,40 @@ const downloadVideo = async (video) => {
               img {
                 margin-right: 4px;
               }
+
+              &.secondary-download {
+                margin-top: 8px;
+                background: rgba(67, 74, 249, 0.72);
+              }
+
+            }
+
+            .retry-button {
+              width: 118px;
+              height: 30px;
+              margin-top: 8px;
+              border: 1px solid #ffb65c;
+              border-radius: 4px;
+              color: #ffb65c;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+              font-size: 12px;
+            }
+
+            .edit-copy-button {
+              width: 118px;
+              height: 30px;
+              margin-bottom: 8px;
+              border: 1px solid rgba(255, 255, 255, .7);
+              border-radius: 4px;
+              color: #fff;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+              font-size: 12px;
             }
 
             .detection-failed-text {
@@ -395,7 +486,7 @@ const downloadVideo = async (video) => {
             }
 
             .preview-button {
-              width: 90px;
+              width: 118px;
               height: 30px;
               cursor: pointer;
               display: flex;
@@ -527,6 +618,24 @@ const downloadVideo = async (video) => {
               color: #ffffff;
               line-height: 12px;
               font-style: normal;
+            }
+
+            .version-badge {
+              position: absolute;
+              left: 8px;
+              bottom: 8px;
+              z-index: 2;
+              max-width: calc(100% - 16px);
+              padding: 3px 6px;
+              border-radius: 4px;
+              color: #fff;
+              background: rgba(67, 74, 249, .8);
+              font-size: 10px;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+
+              &.failed { background: rgba(210, 83, 83, .85); }
             }
           }
         }

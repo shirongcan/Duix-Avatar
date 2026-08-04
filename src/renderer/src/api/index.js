@@ -20,8 +20,16 @@ export function makeVideo(id) {
   return window.electron.ipcRenderer.invoke('video/make', id)
 }
 
-export function exportVideo(id, outputPath) {
-  return window.electron.ipcRenderer.invoke('video/export', id, outputPath)
+export function exportVideo(id, outputPath, variant = 'default') {
+  return window.electron.ipcRenderer.invoke('video/export', id, outputPath, variant)
+}
+
+export function exportVideoSrt(id, outputPath) {
+  return window.electron.ipcRenderer.invoke('video/export-subtitle', id, outputPath)
+}
+
+export function retryVideoSubtitle(id) {
+  return window.electron.ipcRenderer.invoke('video/retry-subtitle', id)
 }
 
 export function modifyVideo(video) {

@@ -1,16 +1,19 @@
 <template>
   <div class="edit">
     <div class="edit-header">{{ $t('common.editView.headerText') }}</div>
-    <t-radio-group class="edit-tabs" variant="default-filled" size="large" v-model="state.activeTab"
-      @change="action.onChangeTab">
-      <t-radio-button :value="EDIT_TABS.TEXT">{{ $t('common.editView.text') }}</t-radio-button>
-      <t-radio-button :value="EDIT_TABS.AUDIO">{{ $t('common.editView.audio') }}</t-radio-button>
-    </t-radio-group>
+    <div class="edit-tabs">
+      <button type="button" :class="{ active: state.activeTab === EDIT_TABS.TEXT }" @click="action.onChangeTab(EDIT_TABS.TEXT)">{{ $t('common.editView.text') }}</button>
+      <button type="button" :class="{ active: state.activeTab === EDIT_TABS.AUDIO }" @click="action.onChangeTab(EDIT_TABS.AUDIO)">{{ $t('common.editView.audio') }}</button>
+      <button type="button" :class="{ active: state.activeTab === EDIT_TABS.SUBTITLE }" @click="action.onChangeTab(EDIT_TABS.SUBTITLE)">{{ $t('common.editView.subtitle') }}</button>
+    </div>
     <div class="edit-body edit-body-text" v-show="getter.isTextTab.value">
       <EditText v-model="select" class="content" :listener="listener" />
     </div>
     <div class="edit-body" v-show="getter.isAudioTab.value">
       <EditUpload v-model="select" class="content" :listener="listener" />
+    </div>
+    <div class="edit-body edit-body-subtitle" v-show="getter.isSubtitleTab.value">
+      <SubtitlePanel v-model="select.subtitle" :has-text="Boolean(select.text?.trim())" class="content" />
     </div>
     <EditListener ref="listener" />
   </div>
@@ -20,13 +23,15 @@ import { computed, reactive, ref } from 'vue'
 import EditListener from './EditListener.vue'
 import EditUpload from './EditUpload.vue';
 import EditText from './EditText.vue';
+import SubtitlePanel from './SubtitlePanel.vue'
 
 const select = defineModel({})
 
 
 const EDIT_TABS = {
   TEXT: '1',
-  AUDIO: '2'
+  AUDIO: '2',
+  SUBTITLE: '3'
 }
 
 const state = reactive({
@@ -42,11 +47,15 @@ const getter = {
   }),
   isAudioTab: computed(() => {
     return state.activeTab === EDIT_TABS.AUDIO
+  }),
+  isSubtitleTab: computed(() => {
+    return state.activeTab === EDIT_TABS.SUBTITLE
   })
 }
 
 const action = {
-  onChangeTab() {
+  onChangeTab(tab) {
+    state.activeTab = tab
     listener.value?.pause()
   }
 }
@@ -75,24 +84,19 @@ const action = {
     padding: 6px;
     border-radius: 4px;
     background-color: #161718;
-    --td-bg-color-container-select: #2B3B52;
+    gap: 4px;
 
-    :deep(.t-radio-button) {
-      width: 50%;
+    button {
+      flex: 1;
+      height: 36px;
+      border: 0;
       border-radius: 4px;
-    }
-
-    :deep(.t-radio-button__label) {
-      margin: auto;
-      font-weight: 400;
+      color: #fff;
+      background: transparent;
+      cursor: pointer;
       font-size: 14px;
-      color: #FFFFFF;
-      line-height: 20px;
-    }
 
-    :deep(.t-is-checked .t-radio-button__label) {
-      // font-weight: bold;
-      font-weight: 400;
+      &.active { background: #2b3b52; }
     }
   }
 
@@ -119,6 +123,11 @@ const action = {
       .content {
         background-color: #161718;
       }
+    }
+
+    &-subtitle {
+      overflow-y: auto;
+      justify-content: stretch;
     }
 
   }

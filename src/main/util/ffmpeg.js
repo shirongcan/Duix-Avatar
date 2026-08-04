@@ -76,6 +76,71 @@ export function extractAudio(videoPath, audioPath) {
   })
 }
 
+export async function detectSpeechIntervals(inputPath) {
+  const duration = Number(await getVideoDuration(inputPath))
+  const silences = []
+  let silenceStart = null
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioFilters('silencedetect=noise=-40dB:d=0.15')
+      .format('null')
+      .output('-')
+      .on('stderr', (line) => {
+        const start = /silence_start:\s*([\d.]+)/.exec(line)
+        if (start) silenceStart = Number(start[1])
+        const end = /silence_end:\s*([\d.]+)/.exec(line)
+        if (end && silenceStart !== null) {
+          silences.push({ start: silenceStart, end: Number(end[1]) })
+          silenceStart = null
+        }
+      })
+      .on('end', resolve)
+      .on('error', reject)
+      .run()
+  })
+  if (silenceStart !== null) silences.push({ start: silenceStart, end: duration })
+  const speech = []
+  let cursor = 0
+  for (const silence of silences) {
+    const start = Math.min(duration, Math.max(cursor, silence.start))
+    if (start - cursor >= 0.08) speech.push({ start: cursor, end: start })
+    cursor = Math.min(duration, Math.max(cursor, silence.end))
+  }
+  if (duration - cursor >= 0.08) speech.push({ start: cursor, end: duration })
+  return speech
+}
+
+export function burnAssSubtitles(inputPath, outputPath, assPath) {
+  const escapedAssPath = assPath.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'")
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoFilters(`ass='${escapedAssPath}'`)
+      .videoCodec('libx264')
+      .audioCodec('copy')
+      .outputOptions(['-preset medium', '-crf 18', '-pix_fmt yuv420p', '-movflags +faststart'])
+      .save(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', reject)
+  })
+}
+
+/**
+ * 将音频转为 FunASR 时间轴识别所需的 16 kHz 单声道裸 PCM。
+ */
+export function convertAudioToAsrPcm(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioCodec('pcm_s16le')
+      .format('s16le')
+      .save(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (error) => reject(error))
+  })
+}
+
 export async function toH264(videoPath, outputPath) {
   // const hasNvidia = await detectNvidia()
   return new Promise((resolve, reject) => {
