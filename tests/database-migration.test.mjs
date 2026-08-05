@@ -24,6 +24,14 @@ test('upgrades existing version 8 databases with dual output fields', () => {
 test('upgrades existing version 9 databases with a speech speed field', () => {
   const migration = migrations.find((item) => item.version === 10)
   assert.ok(migration)
-  assert.equal(migrations.at(-1).version, 10)
   assert.match(migration.script, /alter table video add speed real default 1\.0/i)
+})
+
+test('upgrades existing version 10 databases with background replacement fields', () => {
+  const migration = migrations.find((item) => item.version === 11)
+  assert.ok(migration)
+  assert.equal(migrations.at(-1).version, 11)
+  for (const name of ['background_style', 'background_file_path']) {
+    assert.match(migration.script, new RegExp(`alter table video add ${name} text`, 'i'))
+  }
 })

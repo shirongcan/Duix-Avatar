@@ -25,6 +25,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { localUrl } from '@renderer/utils'
+import { maximumLineUnits, wrapTextToWidth } from '@main/util/subtitle.js'
 
 const props = defineProps({
   model: { type: Object, default: () => ({}) },
@@ -35,14 +36,21 @@ const previewStage = ref()
 const videoFrame = ref()
 const frameWidth = ref(0)
 const frameHeight = ref(0)
+const videoWidth = ref(0)
+const videoHeight = ref(0)
 const isFullscreen = ref(false)
 let observer
 
 const subtitlePreviewText = computed(() => {
   const normalized = props.text.replace(/\s+/g, ' ').trim()
   const sentence = normalized.match(/^.*?[。！？!?；;]/)?.[0] || normalized
-  const characters = Array.from(sentence)
-  return characters.length > 24 ? `${characters.slice(0, 24).join('')}…` : sentence
+  const fontSize = Math.min(72, Math.max(24, Number(props.subtitle.fontSize) || 42))
+  const outlineWidth = Math.min(8, Math.max(0, Number(props.subtitle.outlineWidth) || 0))
+  const videoSize =
+    videoWidth.value && videoHeight.value
+      ? { width: videoWidth.value, height: videoHeight.value }
+      : null
+  return wrapTextToWidth(sentence, maximumLineUnits(fontSize, outlineWidth, videoSize)).join('\n')
 })
 const subtitlePreviewStyle = computed(() => {
   const scaleX = frameWidth.value / 1920 || 1
@@ -70,6 +78,7 @@ const subtitlePreviewStyle = computed(() => {
 })
 
 function observeFrame() {
+  updateVideoSize()
   nextTick(() => {
     observer?.disconnect()
     if (!videoFrame.value) return
@@ -81,6 +90,11 @@ function observeFrame() {
     observer.observe(videoFrame.value)
     update()
   })
+}
+function updateVideoSize() {
+  const video = videoFrame.value?.querySelector('video')
+  videoWidth.value = video?.videoWidth || 0
+  videoHeight.value = video?.videoHeight || 0
 }
 async function toggleFullscreen() {
   if (document.fullscreenElement === previewStage.value) await document.exitFullscreen()
@@ -98,7 +112,7 @@ onBeforeUnmount(() => { observer?.disconnect(); document.removeEventListener('fu
 .preview-stage { position: relative; display: flex; justify-content: center; align-items: center; max-width: 100%; max-height: 100%; background: #000; overflow: hidden; border-radius: 4px; }
 .video-frame { position: relative; display: inline-flex; max-width: 100%; max-height: 100%; overflow: hidden; }
 .video { display: block; max-width: 100%; max-height: calc(100vh - 140px); }
-.subtitle-preview { position: absolute; z-index: 2; font-family: 'Microsoft YaHei', sans-serif; font-weight: 700; line-height: 1.2; text-align: center; word-break: break-word; pointer-events: none; }
+.subtitle-preview { position: absolute; z-index: 2; font-family: 'Microsoft YaHei', sans-serif; font-weight: 700; line-height: 1.2; text-align: center; white-space: pre-line; word-break: break-word; pointer-events: none; }
 .fullscreen-button { position: absolute; right: 10px; bottom: 42px; z-index: 4; width: 32px; height: 32px; border: 0; border-radius: 4px; color: #fff; background: rgba(0,0,0,.65); cursor: pointer; font-size: 18px; }
 .preview-stage:fullscreen { width: 100vw; height: 100vh; max-width: none; max-height: none; border-radius: 0; }
 .preview-stage:fullscreen .video-frame { max-width: 100vw; max-height: 100vh; }

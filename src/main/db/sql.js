@@ -86,5 +86,12 @@ export default [
         script: `
                  alter table video add speed real default 1.0;
                 `
+    },
+    {
+        version: 11,
+        script: `
+                 alter table video add background_style text;
+                 alter table video add background_file_path text;
+                `
     }
 ]

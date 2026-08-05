@@ -1,6 +1,11 @@
 const SENTENCE_END = /[。！？!?；;]/
 const SOFT_BREAK = /[，,、：:]/
 const PUNCTUATION_ONLY = /^[\s。！？!?；;，,、：:]+$/
+const PLAY_WIDTH = 1920
+const PLAY_HEIGHT = 1080
+const SUBTITLE_MARGIN = 60
+const WRAP_SAFETY_RATIO = 0.94
+const WRAP_BREAK_AFTER = /[\s，。！？、；：）】》〉」』"'.,;:)!?]/
 
 function visibleLength(text) {
   return Array.from(String(text || '').replace(/\s/g, '')).length
@@ -371,6 +376,84 @@ function escapeAssText(text) {
   return String(text).replaceAll('\\', '\\\\').replaceAll('{', '\\{').replaceAll('}', '\\}').replace(/\r?\n/g, '\\N')
 }
 
+function characterWidthUnits(character) {
+  const code = character.codePointAt(0)
+  if (code >= 0xfe00 && code <= 0xfe0f) return 0
+  const wide =
+    (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
+    (code >= 0x2e80 && code <= 0x9fff) || // CJK radicals, punctuation, kana, unified ideographs
+    (code >= 0xa000 && code <= 0xa4cf) || // Yi syllables
+    (code >= 0xac00 && code <= 0xd7af) || // Hangul syllables
+    (code >= 0xf900 && code <= 0xfaff) || // CJK compatibility ideographs
+    (code >= 0xfe30 && code <= 0xfe6f) || // CJK compatibility forms
+    (code >= 0xff00 && code <= 0xff60) || // full-width forms
+    (code >= 0xffe0 && code <= 0xffe6) || // full-width signs
+    (code >= 0x20000 && code <= 0x2ffff) // CJK extension B+
+  if (wide) return 1
+  if (character === ' ') return 0.25
+  return 0.5
+}
+
+export function estimateTextUnits(text) {
+  return Array.from(String(text || '')).reduce(
+    (total, character) => total + characterWidthUnits(character),
+    0
+  )
+}
+
+/**
+ * 按字号、描边宽度和成片实际分辨率计算一行最多能容纳多少“宽度单位”
+ * （一个 CJK 全角字符约 1 单位，半角字符约 0.5 单位）。libass 会按视频
+ * 高度缩放字体、按宽度缩放坐标，因此竖屏等非 16:9 成片需要按实际尺寸收紧。
+ */
+export function maximumLineUnits(fontSize, outlineWidth = 0, videoSize = null) {
+  const videoWidth = Number(videoSize?.width) || PLAY_WIDTH
+  const videoHeight = Number(videoSize?.height) || PLAY_HEIGHT
+  const scaleX = videoWidth / PLAY_WIDTH
+  const scaleY = videoHeight / PLAY_HEIGHT
+  const availableWidth =
+    (videoWidth - (SUBTITLE_MARGIN * 2 + Math.max(0, Number(outlineWidth) || 0) * 2) * scaleX) /
+    scaleY
+  const size = Math.max(1, Number(fontSize) || 42)
+  return Math.max(4, Math.floor((availableWidth * WRAP_SAFETY_RATIO) / size))
+}
+
+/**
+ * 将一段字幕文本自动换行：优先在空格/标点后断行，单个超宽“单词”或连续
+ * 中文则按字符边界硬断，保证每一行都落在画面安全宽度内。
+ */
+export function wrapTextToWidth(text, maximumUnits) {
+  const remaining = Array.from(String(text || '').trim())
+  const lines = []
+  while (remaining.length) {
+    const line = []
+    let units = 0
+    let breakAt = -1
+    for (let index = 0; index < remaining.length; index++) {
+      const character = remaining[index]
+      const characterUnits = characterWidthUnits(character)
+      if (line.length && units + characterUnits > maximumUnits) {
+        if (breakAt > 0) {
+          lines.push(line.slice(0, breakAt).join('').trim())
+          remaining.splice(0, breakAt)
+        } else {
+          lines.push(line.join('').trim())
+          remaining.splice(0, index)
+        }
+        break
+      }
+      line.push(character)
+      units += characterUnits
+      if (WRAP_BREAK_AFTER.test(character)) breakAt = line.length
+      if (index === remaining.length - 1) {
+        lines.push(line.join('').trim())
+        remaining.length = 0
+      }
+    }
+  }
+  return lines.filter(Boolean)
+}
+
 export function normalizeSubtitleStyle(style = {}) {
   const outlineWidth = Number(style.outlineWidth)
   const burnEnabled = Boolean(style.burnEnabled)
@@ -392,7 +475,8 @@ export function createAss(
   style = {},
   speechIntervals = [],
   cachedTiming = null,
-  asrTiming = null
+  asrTiming = null,
+  videoSize = null
 ) {
   const normalized = normalizeSubtitleStyle(style)
   const alignment = { top: 8, middle: 5, bottom: 2 }[normalized.position]
@@ -401,8 +485,12 @@ export function createAss(
   const primaryColor = assColor(normalized.textColor, 'FFFFFF')
   const outlineColor = assColor(normalized.outlineColor, '000000')
   const cues = createSubtitleCues(text, durationSeconds, speechIntervals, cachedTiming, asrTiming)
+  const maximumUnits = maximumLineUnits(normalized.fontSize, normalized.outlineWidth, videoSize)
   const header = `[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Microsoft YaHei,${normalized.fontSize},${primaryColor},${primaryColor},${outlineColor},&H60000000,-1,0,0,0,100,100,0,0,1,${normalized.outlineWidth},0,${alignment},60,60,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
-  const events = cues.map((cue) => `Dialogue: 0,${formatAssTime(cue.start)},${formatAssTime(cue.end)},Default,,0,0,0,,{\\an${alignment}\\pos(960,${positionY})}${escapeAssText(cue.text)}`)
+  const events = cues.map((cue) => {
+    const cueText = wrapTextToWidth(cue.text, maximumUnits).join('\n')
+    return `Dialogue: 0,${formatAssTime(cue.start)},${formatAssTime(cue.end)},Default,,0,0,0,,{\\an${alignment}\\pos(960,${positionY})}${escapeAssText(cueText)}`
+  })
   return { content: `${header}\n${events.join('\n')}\n`, cues }
 }
 

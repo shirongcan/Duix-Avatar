@@ -101,6 +101,9 @@
               <div v-if="canGenerateSubtitle(item)" class="retry-button" @click="retrySubtitle(item)">
                 {{ item.subtitle_render_status === 'failed' ? $t('common.videoList.retrySubtitle') : $t('common.videoList.generateSubtitle') }}
               </div>
+              <div v-if="item.status === 'success'" class="background-button" @click="openBackground(item)">
+                {{ $t('common.videoList.backgroundTitle') }}
+              </div>
               <div v-if="item.status === 'failed'" class="detection-failed-text">
                 {{ $t('common.videoList.makeFailedText') }}
                 <img src="../../../assets/images/home/icon-delete.svg" />
@@ -176,6 +179,12 @@
       :subtitledUrl="state.previewSubtitledUrl"
       @cancel="cancelFun"
     />
+    <BackgroundDialog
+      :visible="state.showBackgroundDialog"
+      :video="state.backgroundVideo"
+      @cancel="state.showBackgroundDialog = false"
+      @success="onBackgroundSuccess"
+    />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
   </div>
 </template>
@@ -185,6 +194,7 @@ import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { videoPage, exportVideo, exportVideoSrt, removeVideo, retryVideoSubtitle } from '@renderer/api/index.js'
 import { formatDate, millisecondsToTime } from '@renderer/utils/index.js'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
+import BackgroundDialog from '@renderer/views/home/components/BackgroundDialog.vue'
 import { Client } from '@renderer/client'
 import { useHomeStore } from '@renderer/stores/home.js'
 import { useRouter } from 'vue-router'
@@ -213,6 +223,8 @@ const state = reactive({
   previewCleanUrl: '',
   previewSubtitledUrl: '',
   showVideoDialog: false,
+  showBackgroundDialog: false,
+  backgroundVideo: {},
   pageSize: 10,
   total: 0,
   delVideoId: '',
@@ -241,6 +253,14 @@ const previewVideo = (video) => {
   state.showVideoDialog = true
   state.previewCleanUrl = video.clean_file_path || video.file_path
   state.previewSubtitledUrl = video.subtitled_file_path || ''
+}
+const openBackground = (video) => {
+  state.backgroundVideo = video
+  state.showBackgroundDialog = true
+}
+const onBackgroundSuccess = async () => {
+  state.showBackgroundDialog = false
+  await videoPageAJax()
 }
 const videoPageAJax = async () => {
   try {
@@ -440,6 +460,20 @@ const retrySubtitle = async (video) => {
               border: 1px solid #ffb65c;
               border-radius: 4px;
               color: #ffb65c;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+              font-size: 12px;
+            }
+
+            .background-button {
+              width: 118px;
+              height: 30px;
+              margin-top: 8px;
+              border: 1px solid #5cb8ff;
+              border-radius: 4px;
+              color: #5cb8ff;
               display: flex;
               align-items: center;
               justify-content: center;

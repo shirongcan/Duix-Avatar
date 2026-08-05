@@ -206,3 +206,24 @@ export function getVideoDuration(videoPath) {
     })
   })
 }
+
+export function getVideoDimensions(videoPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath).ffprobe((err, data) => {
+      if (err) {
+        log.error("🚀 ~ ffmpeg ~ err:", err)
+        reject(err)
+      } else if (data && data.streams && data.streams.length > 0) {
+        const videoStream = data.streams.find((stream) => stream.codec_type === 'video') || data.streams[0]
+        if (videoStream?.width && videoStream?.height) {
+          resolve({ width: Number(videoStream.width), height: Number(videoStream.height) })
+        } else {
+          reject(new Error('No video dimensions found'))
+        }
+      } else {
+        log.error('No streams found')
+        reject(new Error('No streams found'))
+      }
+    })
+  })
+}

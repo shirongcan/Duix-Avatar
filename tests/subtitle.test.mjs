@@ -5,8 +5,11 @@ import {
   createAss,
   createSrtFromCues,
   createSubtitleCues,
+  estimateTextUnits,
+  maximumLineUnits,
   normalizeSubtitleStyle,
-  splitSubtitleText
+  splitSubtitleText,
+  wrapTextToWidth
 } from '../src/main/util/subtitle.js'
 
 test('splits Chinese punctuation and preserves all text', () => {
@@ -93,6 +96,70 @@ test('normalizes style boundaries and escapes ASS text', () => {
   assert.match(content, /PlayResY: 1080/)
   assert.ok(content.includes('\\{测试\\}'))
   assert.ok(content.includes('\\\\路径'))
+})
+
+test('wraps long captions into width-fitting ASS lines without losing text', () => {
+  const text =
+    '这是一个非常长的字幕句子没有任何标点符号也没有空格需要自动换行处理并且保持完整内容不会丢失。'
+  const { content } = createAss(text, 8, {
+    enabled: true,
+    burnEnabled: true,
+    fontSize: 72,
+    outlineWidth: 8
+  })
+  const events = content.split('\n').filter((line) => line.startsWith('Dialogue:'))
+  assert.ok(content.includes('\\N'))
+  const unwrapped = events
+    .map((line) =>
+      line
+        .replace(/^Dialogue: 0,[^,]+,[^,]+,Default,,0,0,0,,/, '')
+        .replace(/^\{[^}]*\}/, '')
+        .replaceAll('\\N', '')
+        .replaceAll('\\{', '{')
+        .replaceAll('\\}', '}')
+    )
+    .join('')
+  assert.equal(unwrapped.replace(/\s/g, ''), text.replace(/\s/g, ''))
+})
+
+test('wrapTextToWidth keeps every line within the available units', () => {
+  const text =
+    '这是一个非常长的字幕句子没有任何标点符号也没有空格需要自动换行处理 ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789'
+  const maximumUnits = maximumLineUnits(72, 8)
+  const lines = wrapTextToWidth(text, maximumUnits)
+  assert.ok(lines.length > 1)
+  for (const line of lines) {
+    assert.ok(estimateTextUnits(line) <= maximumUnits, `line exceeds width: ${line}`)
+  }
+  assert.equal(lines.join('').replace(/\s/g, ''), text.replace(/\s/g, ''))
+})
+
+test('wrapping is font-size aware', () => {
+  const text = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十'
+  const events = (ass) =>
+    ass.content.split('\n').filter((line) => line.startsWith('Dialogue:'))
+  const small = createAss(text, 6, { enabled: true, burnEnabled: true, fontSize: 24 })
+  const large = createAss(text, 6, { enabled: true, burnEnabled: true, fontSize: 72 })
+  assert.ok(events(small).every((line) => !line.includes('\\N')))
+  assert.ok(events(large).some((line) => line.includes('\\N')))
+})
+
+test('tightens wrapping for portrait videos to match libass font scaling', () => {
+  const text = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十'
+  const landscape = maximumLineUnits(72, 0, { width: 1920, height: 1080 })
+  const portrait = maximumLineUnits(72, 0, { width: 1080, height: 1920 })
+  assert.ok(portrait < landscape)
+  const { content } = createAss(
+    text,
+    6,
+    { enabled: true, burnEnabled: true, fontSize: 72 },
+    [],
+    null,
+    null,
+    { width: 1080, height: 1920 }
+  )
+  const events = content.split('\n').filter((line) => line.startsWith('Dialogue:'))
+  assert.ok(events.some((line) => line.includes('\\N')))
 })
 
 test('burn intent always enables subtitles', () => {

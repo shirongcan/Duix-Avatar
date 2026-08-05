@@ -32,6 +32,20 @@ export function retryVideoSubtitle(id) {
   return window.electron.ipcRenderer.invoke('video/retry-subtitle', id)
 }
 
+export function replaceVideoBackground(id, style, options = {}) {
+  return window.electron.ipcRenderer.invoke('video/replace-background', id, style, options)
+}
+
+export function previewVideoBackground(id, style) {
+  return window.electron.ipcRenderer.invoke('video/preview-background', id, style)
+}
+
+export function onVideoBackgroundProgress(callback) {
+  const handler = (_event, payload) => callback(payload)
+  window.electron.ipcRenderer.on('video/background-progress', handler)
+  return () => window.electron.ipcRenderer.removeListener('video/background-progress', handler)
+}
+
 export function modifyVideo(video) {
   return window.electron.ipcRenderer.invoke('video/modify', video)
 }

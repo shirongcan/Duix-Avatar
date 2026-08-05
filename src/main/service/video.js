@@ -21,8 +21,18 @@ import {
   burnAssSubtitles,
   convertAudioToAsrPcm,
   detectSpeechIntervals,
+  getVideoDimensions,
   getVideoDuration
 } from '../util/ffmpeg.js'
+import {
+  checkContainerPostprocess,
+  createPreviewClip,
+  createSolidColorImage,
+  extractFirstFrame,
+  mergeAudioAndH264,
+  normalizeBackgroundStyle,
+  runRvmMatting
+} from '../util/background-pipeline.js'
 import { createAss, createSrtFromCues, normalizeSubtitleStyle } from '../util/subtitle.js'
 import { resolveVideoSaveSource } from '../util/video-revision.js'
 
@@ -84,6 +94,181 @@ function subtitleRequested(video) {
   return Boolean(style.enabled && style.burnEnabled && video?.text_content?.trim())
 }
 
+function isInsideDirectory(root, filePath) {
+  const relativePath = path.relative(root, filePath)
+  return !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+}
+
+function resolveBackgroundInput(rawStyle) {
+  const style = normalizeBackgroundStyle({ ...parseJSON(rawStyle, {}), enabled: true })
+  if (style.type === 'color') {
+    return { type: 'color', value: style.color }
+  }
+  const filePath = absoluteVideoPath(style.imagePath)
+  if (filePath && fs.existsSync(filePath)) {
+    return { type: style.type, value: filePath }
+  }
+  return null
+}
+
+async function stageBackgroundForContainer(background, face2faceRoot, postprocessDir, taskId, size) {
+  if (background.type === 'color') {
+    return createSolidColorImage(
+      background.value,
+      path.join(postprocessDir, `${taskId}-color.png`),
+      size
+    )
+  }
+  if (isInsideDirectory(face2faceRoot, background.value)) {
+    return background.value
+  }
+  const extension = path.extname(background.value).toLowerCase() || '.png'
+  const staged = path.join(postprocessDir, `${taskId}-background${extension}`)
+  fs.copyFileSync(background.value, staged)
+  return staged
+}
+
+/**
+ * 背景替换：原视频完全不动，生成的新视频作为一条新的作品保存到数据库。
+ */
+async function replaceVideoBackground(videoId, rawStyle, options = {}) {
+  const background = resolveBackgroundInput(rawStyle)
+  if (!background) throw new Error('背景资源不存在，请重新选择背景')
+
+  const video = selectVideoByID(videoId)
+  if (!video?.file_path) throw new Error('找不到已生成的视频')
+  const cleanPath = absoluteVideoPath(video.clean_file_path || video.file_path)
+  if (!cleanPath || !fs.existsSync(cleanPath)) throw new Error('找不到无字幕版视频')
+  if (!isManagedVideoPath(cleanPath)) throw new Error('无字幕版不在受管理的视频目录中')
+
+  const face2faceRoot = path.dirname(assetPath.model)
+  const postprocessDir = path.join(face2faceRoot, 'postprocess')
+  fs.mkdirSync(postprocessDir, { recursive: true })
+  if (!(await checkContainerPostprocess())) {
+    throw new Error('背景处理容器未就绪（未运行或未挂载处理脚本），请先启动 Docker 并在 deploy 目录执行 docker-compose up -d 后重试')
+  }
+
+  const taskId = crypto.randomUUID()
+  const parsedPath = path.parse(cleanPath)
+  const bgOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.bg-${Date.now()}.mp4`)
+  const subtitledOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.bg-sub-${Date.now()}.mp4`)
+  const silentOutputPath = path.join(postprocessDir, `${taskId}-silent.mp4`)
+  const tempFiles = []
+  try {
+    const dims = await getVideoDimensions(cleanPath)
+    const stagedBackground = await stageBackgroundForContainer(
+      background,
+      face2faceRoot,
+      postprocessDir,
+      taskId,
+      { width: dims.width, height: dims.height }
+    )
+    if (stagedBackground !== background.value) tempFiles.push(stagedBackground)
+
+    await runRvmMatting({
+      sourcePath: cleanPath,
+      backgroundPath: stagedBackground,
+      outputPath: silentOutputPath,
+      face2faceRoot,
+      onProgress: (percent) => {
+        options.progress?.({ percent, message: `正在处理人像 ${percent}%` })
+      }
+    })
+
+    const includeSubtitles = options.includeSubtitles !== false && subtitleRequested(video)
+    let cues = null
+    if (includeSubtitles) {
+      await mergeAudioAndH264(silentOutputPath, cleanPath, bgOutputPath)
+      cues = await renderVideoSubtitles({ ...video }, bgOutputPath, subtitledOutputPath)
+    } else {
+      await mergeAudioAndH264(silentOutputPath, cleanPath, bgOutputPath)
+    }
+
+    const duration = Number(await getVideoDuration(bgOutputPath)) || 0
+    const newId = insertVideo({
+      model_id: video.model_id,
+      name: options.name || `${video.name}-新背景`,
+      status: 'success',
+      message: '背景替换完成',
+      progress: 100,
+      duration,
+      text_content: video.text_content,
+      voice_id: video.voice_id,
+      audio_path: null,
+      speed: Number(video.speed) > 0 ? Number(video.speed) : 1,
+      subtitle_style: video.subtitle_style,
+      subtitle_timing: cues,
+      subtitle_render_status: includeSubtitles ? 'success' : 'not_requested',
+      subtitle_render_message: null,
+      file_path: relativeVideoPath(bgOutputPath),
+      clean_file_path: relativeVideoPath(bgOutputPath),
+      subtitled_file_path: includeSubtitles ? relativeVideoPath(subtitledOutputPath) : null
+    })
+    options.progress?.({ percent: 100, message: '背景替换完成' })
+    return exposeVideoPaths(selectVideoByID(newId))
+  } finally {
+    for (const file of [silentOutputPath, ...tempFiles]) {
+      try {
+        fs.rmSync(file, { force: true })
+      } catch (error) {
+        log.warn('清理背景替换临时文件失败:', error.message)
+      }
+    }
+  }
+}
+
+async function previewVideoBackground(videoId, rawStyle) {
+  const video = selectVideoByID(videoId)
+  if (!video) throw new Error('找不到指定的视频作品')
+  const background = resolveBackgroundInput(rawStyle)
+  if (!background) throw new Error('背景资源不存在，请重新选择背景')
+
+  const cleanPath = absoluteVideoPath(video.clean_file_path || video.file_path)
+  if (!cleanPath || !fs.existsSync(cleanPath)) throw new Error('找不到原始视频')
+  const face2faceRoot = path.dirname(assetPath.model)
+  const postprocessDir = path.join(face2faceRoot, 'postprocess')
+  fs.mkdirSync(postprocessDir, { recursive: true })
+  if (!(await checkContainerPostprocess())) {
+    throw new Error('背景处理容器未就绪（未运行或未挂载处理脚本），请先启动 Docker 并在 deploy 目录执行 docker-compose up -d 后重试')
+  }
+
+  const parsedPath = path.parse(cleanPath)
+  const previewOutputPath = path.join(parsedPath.dir, `${parsedPath.name}.bg-preview.png`)
+  const taskId = crypto.randomUUID()
+  const clipPath = path.join(postprocessDir, `${taskId}-preview-clip.mp4`)
+  const silentPreviewPath = path.join(postprocessDir, `${taskId}-preview-silent.mp4`)
+  const tempFiles = []
+
+  try {
+    const dims = await getVideoDimensions(cleanPath)
+    const stagedBackground = await stageBackgroundForContainer(
+      background,
+      face2faceRoot,
+      postprocessDir,
+      taskId,
+      { width: dims.width, height: dims.height }
+    )
+    if (stagedBackground !== background.value) tempFiles.push(stagedBackground)
+    await createPreviewClip(cleanPath, clipPath)
+    await runRvmMatting({
+      sourcePath: clipPath,
+      backgroundPath: stagedBackground,
+      outputPath: silentPreviewPath,
+      face2faceRoot
+    })
+    await extractFirstFrame(silentPreviewPath, previewOutputPath)
+    return { previewPath: previewOutputPath }
+  } finally {
+    for (const file of [clipPath, silentPreviewPath, ...tempFiles]) {
+      try {
+        fs.rmSync(file, { force: true })
+      } catch (error) {
+        log.warn('清理背景预览临时文件失败:', error.message)
+      }
+    }
+  }
+}
+
 async function getSubtitleAsrTiming(video) {
   const audioName = video?.audio_path
   if (!audioName) return null
@@ -108,6 +293,12 @@ async function getSubtitleAsrTiming(video) {
 
 async function resolveSubtitleCues(video, inputPath, options = {}) {
   const duration = Number(video.duration) || Number(await getVideoDuration(inputPath))
+  let videoSize = null
+  try {
+    videoSize = await getVideoDimensions(inputPath)
+  } catch (error) {
+    log.warn('Unable to detect video dimensions, using 1920x1080 subtitle baseline:', error.message)
+  }
   let speechIntervals = []
   try {
     speechIntervals = await detectSpeechIntervals(inputPath)
@@ -123,7 +314,8 @@ async function resolveSubtitleCues(video, inputPath, options = {}) {
     style,
     speechIntervals,
     cachedTiming,
-    asrTiming
+    asrTiming,
+    videoSize
   )
 }
 
@@ -518,14 +710,15 @@ async function retrySubtitle(videoId) {
     fs.rmSync(outputPath, { force: true })
     const cues = await renderVideoSubtitles({ ...video, subtitle_style: subtitleStyle }, cleanPath, outputPath)
     const relativePath = relativeVideoPath(outputPath)
-    update({
+    const subtitleUpdate = {
       id: videoId,
       file_path: relativePath,
       subtitled_file_path: relativePath,
       subtitle_timing: cues,
       subtitle_render_status: 'success',
       subtitle_render_message: null
-    })
+    }
+    update(subtitleUpdate)
     return exposeVideoPaths(selectVideoByID(videoId))
   } catch (error) {
     fs.rmSync(outputPath, { force: true })
@@ -585,6 +778,18 @@ export function init() {
   })
   ipcMain.handle(MODEL_NAME + '/retry-subtitle', (event, ...args) => {
     return retrySubtitle(...args)
+  })
+  ipcMain.handle(MODEL_NAME + '/replace-background', async (event, ...args) => {
+    const [videoId, style, options] = args
+    const sendProgress = (payload) => {
+      if (event.sender && !event.sender.isDestroyed()) {
+        event.sender.send('video/background-progress', { videoId, ...payload })
+      }
+    }
+    return replaceVideoBackground(videoId, style, { ...(options || {}), progress: sendProgress })
+  })
+  ipcMain.handle(MODEL_NAME + '/preview-background', (event, ...args) => {
+    return previewVideoBackground(...args)
   })
   ipcMain.handle(MODEL_NAME + '/remove', (event, ...args) => {
     return removeVideo(...args)
