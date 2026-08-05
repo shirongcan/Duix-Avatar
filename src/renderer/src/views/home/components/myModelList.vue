@@ -100,7 +100,7 @@
     </div>
     <VideoDialog
       :showVideoDialog="state.showVideoDialog"
-      :videoUrl="state.videoUrl"
+      :cleanUrl="state.videoUrl"
       @cancel="cancelFun"
     />
     <DeleteDialog ref="deleteDialogRef" @ok="okDelete" />
