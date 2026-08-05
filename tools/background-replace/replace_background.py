@@ -57,7 +57,15 @@ class BackgroundReader:
             self.capture.release()
 
 
-def replace_background(source_path, background_path, output_path, model_path):
+def replace_background(
+    source_path,
+    background_path,
+    output_path,
+    model_path,
+    max_side=512,
+    edge_mode='none',
+    edge_amount=0,
+):
     if not torch.cuda.is_available():
         raise RuntimeError('未检测到可用的 NVIDIA 显卡')
 
@@ -85,7 +93,7 @@ def replace_background(source_path, background_path, output_path, model_path):
     device = torch.device('cuda')
     model = torch.jit.load(model_path, map_location=device).eval()
     recurrent = [None] * 4
-    downsample_ratio = min(1.0, 512.0 / max(width, height))
+    downsample_ratio = min(1.0, float(max_side) / max(width, height))
     processed = 0
 
     try:
@@ -100,12 +108,27 @@ def replace_background(source_path, background_path, output_path, model_path):
                 tensor = tensor.permute(2, 0, 1).unsqueeze(0).div_(255.0)
                 foreground, alpha, *recurrent = model(tensor, *recurrent, downsample_ratio)
 
+                alpha_np = alpha[0][0].float().cpu().numpy()
+                if edge_mode == 'feather' and edge_amount > 0:
+                    sigma = max(0.1, float(edge_amount) * 0.5)
+                    alpha_np = cv2.GaussianBlur(alpha_np, (0, 0), sigmaX=sigma)
+                elif edge_mode == 'erode' and edge_amount > 0:
+                    kernel_size = 2 * max(1, int(edge_amount)) + 1
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                    alpha_np = cv2.erode(alpha_np, kernel)
+                alpha_t = (
+                    torch.from_numpy(alpha_np)
+                    .to(device=device, dtype=torch.float16)
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                )
+
                 background_rgb = cv2.cvtColor(background.next(), cv2.COLOR_BGR2RGB)
                 background_tensor = torch.from_numpy(background_rgb).to(
                     device=device, dtype=torch.float16
                 )
                 background_tensor = background_tensor.permute(2, 0, 1).unsqueeze(0).div_(255.0)
-                composition = foreground * alpha + background_tensor * (1.0 - alpha)
+                composition = foreground * alpha_t + background_tensor * (1.0 - alpha_t)
                 composition = composition[0].permute(1, 2, 0).mul(255).byte().cpu().numpy()
                 writer.write(cv2.cvtColor(composition, cv2.COLOR_RGB2BGR))
 
@@ -129,8 +152,24 @@ def main():
     parser.add_argument('--background', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--model', required=True)
+    parser.add_argument('--max-side', type=int, default=512, help='内部分辨率上限，越大越精细（512 快速 / 768 高清）')
+    parser.add_argument(
+        '--edge-mode',
+        choices=['none', 'feather', 'erode'],
+        default='none',
+        help='边缘处理：none 不处理 / feather 羽化 / erode 收缩去边',
+    )
+    parser.add_argument('--edge-amount', type=int, default=0, help='边缘处理强度 1-10')
     args = parser.parse_args()
-    replace_background(args.source, args.background, args.output, args.model)
+    replace_background(
+        args.source,
+        args.background,
+        args.output,
+        args.model,
+        args.max_side,
+        args.edge_mode,
+        args.edge_amount,
+    )
 
 
 if __name__ == '__main__':

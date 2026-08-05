@@ -59,8 +59,12 @@ export function runRvmMatting({
   outputPath,
   face2faceRoot,
   modelPath = RVM_MODEL,
+  matting = {},
   onProgress = () => {}
 }) {
+  const maxSide = Number(matting.maxSide) > 0 ? Number(matting.maxSide) : 512
+  const edgeMode = matting.edgeMode === 'feather' || matting.edgeMode === 'erode' ? matting.edgeMode : 'none'
+  const edgeAmount = Math.min(10, Math.max(0, Number(matting.edgeAmount) || 0))
   const args = [
     'exec',
     RVM_CONTAINER,
@@ -75,6 +79,9 @@ export function runRvmMatting({
     '--model',
     modelPath
   ]
+  args.push('--max-side', String(maxSide))
+  args.push('--edge-mode', edgeMode)
+  args.push('--edge-amount', String(edgeAmount))
 
   return new Promise((resolve, reject) => {
     const child = execFile(

@@ -1,0 +1,72 @@
+{
+  "buttons": [
+    {
+      "text": "预览效果",
+      "color": "rgb(255, 255, 255)",
+      "background": "rgb(61, 64, 69)",
+      "border": "rgb(74, 79, 87)"
+    },
+    {
+      "text": "开始替换",
+      "color": "rgb(255, 255, 255)",
+      "background": "rgb(48, 156, 255)",
+      "border": "rgb(48, 156, 255)"
+    }
+  ],
+  "radios": [
+    {
+      "text": "纯色背景",
+      "color": "rgb(255, 255, 255)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgb(255, 255, 255)"
+    },
+    {
+      "text": "图片背景",
+      "color": "rgba(255, 255, 255, 0.6)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgba(255, 255, 255, 0.6)"
+    },
+    {
+      "text": "视频背景",
+      "color": "rgba(255, 255, 255, 0.6)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgba(255, 255, 255, 0.6)"
+    },
+    {
+      "text": "快速",
+      "color": "rgb(255, 255, 255)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgb(255, 255, 255)"
+    },
+    {
+      "text": "高清",
+      "color": "rgba(255, 255, 255, 0.6)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgba(255, 255, 255, 0.6)"
+    },
+    {
+      "text": "无",
+      "color": "rgb(255, 255, 255)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgb(255, 255, 255)"
+    },
+    {
+      "text": "羽化",
+      "color": "rgba(255, 255, 255, 0.6)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgba(255, 255, 255, 0.6)"
+    },
+    {
+      "text": "去边",
+      "color": "rgba(255, 255, 255, 0.6)",
+      "background": "rgba(0, 0, 0, 0)",
+      "border": "rgba(255, 255, 255, 0.6)"
+    }
+  ],
+  "dialog": {
+    "text": "",
+    "color": "rgba(0, 0, 0, 0.9)",
+    "background": "rgb(255, 255, 255)",
+    "border": "rgb(232, 232, 232)"
+  }
+}

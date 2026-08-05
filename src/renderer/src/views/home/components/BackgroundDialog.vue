@@ -18,8 +18,8 @@
             ></video>
             <div v-else class="bg-video-empty">{{ $t('common.videoList.backgroundTitle') }}</div>
           </div>
-          <div v-if="previewUrl" class="bg-preview-result">
-            <img :src="localUrl.addFileProtocol(previewUrl)" />
+          <div v-if="state.previewUrl" class="bg-preview-result">
+            <img :src="localUrl.addFileProtocol(state.previewUrl)" />
             <span>{{ $t('common.videoList.backgroundPreview') }}</span>
           </div>
         </div>
@@ -31,6 +31,28 @@
               <t-radio-button value="image">{{ $t('common.videoList.backgroundTypeImage') }}</t-radio-button>
               <t-radio-button value="video">{{ $t('common.videoList.backgroundTypeVideo') }}</t-radio-button>
             </t-radio-group>
+          </div>
+
+          <div class="bg-row matting-row">
+            <span class="bg-row-label">{{ $t('common.videoList.backgroundQualityLabel') }}</span>
+            <t-radio-group v-model="state.quality" variant="default-filled">
+              <t-radio-button value="fast">{{ $t('common.videoList.backgroundQualityFast') }}</t-radio-button>
+              <t-radio-button value="hd">{{ $t('common.videoList.backgroundQualityHd') }}</t-radio-button>
+            </t-radio-group>
+          </div>
+
+          <div class="bg-row matting-row">
+            <span class="bg-row-label">{{ $t('common.videoList.backgroundEdgeLabel') }}</span>
+            <t-radio-group v-model="state.edgeMode" variant="default-filled">
+              <t-radio-button value="none">{{ $t('common.videoList.backgroundEdgeNone') }}</t-radio-button>
+              <t-radio-button value="feather">{{ $t('common.videoList.backgroundEdgeFeather') }}</t-radio-button>
+              <t-radio-button value="erode">{{ $t('common.videoList.backgroundEdgeErode') }}</t-radio-button>
+            </t-radio-group>
+          </div>
+
+          <div class="bg-row matting-row" v-if="state.edgeMode !== 'none'">
+            <span class="bg-row-label">{{ $t('common.videoList.backgroundEdgeAmount') }}：{{ state.edgeAmount }}</span>
+            <t-slider v-model="state.edgeAmount" class="matting-slider" :min="1" :max="10" :step="1" />
           </div>
 
           <div class="bg-row" v-if="state.type === 'color'">
@@ -145,6 +167,9 @@ const state = reactive({
   type: 'color',
   color: '#1E90FF',
   imagePath: '',
+  quality: 'fast',
+  edgeMode: 'none',
+  edgeAmount: 3,
   includeSubtitles: true,
   uploading: false,
   previewing: false,
@@ -211,6 +236,13 @@ const action = {
       imagePath: state.imagePath
     }
   },
+  mattingPayload() {
+    return {
+      quality: state.quality,
+      edgeMode: state.edgeMode,
+      edgeAmount: state.edgeAmount
+    }
+  },
   async preview() {
     if (!props.video?.id) return
     if (state.type !== 'color' && !state.imagePath) {
@@ -219,7 +251,9 @@ const action = {
     }
     state.previewing = true
     try {
-      const result = await previewVideoBackground(props.video.id, action.stylePayload())
+      const result = await previewVideoBackground(props.video.id, action.stylePayload(), {
+        matting: action.mattingPayload()
+      })
       state.previewUrl = result?.previewPath || ''
     } catch (error) {
       console.error(error)
@@ -239,7 +273,8 @@ const action = {
     state.progressMessage = ''
     try {
       await replaceVideoBackground(props.video.id, action.stylePayload(), {
-        includeSubtitles: state.includeSubtitles
+        includeSubtitles: state.includeSubtitles,
+        matting: action.mattingPayload()
       })
       MessagePlugin.success(t('common.videoList.backgroundReplaceSuccess'))
       emit('success')
@@ -266,9 +301,15 @@ const close = () => {
 .background-dialog-box {
   --td-bg-color-container: #1d1e20;
   --td-bg-color-secondarycontainer: #161718;
+  --td-bg-color-component: #3d4045;
+  --td-bg-color-component-hover: #4a4f57;
+  --td-bg-color-component-active: #565b64;
+  --td-bg-color-component-disabled: #2a2c2f;
   --td-bg-color-specialcomponent: #1d1e20;
   --td-bg-color-specialcomponent-hover: #2a2c2f;
   --td-bg-color-container-select: #161718;
+  --td-bg-color-secondarycomponent: #3d4045;
+  --td-bg-color-secondarycomponent-hover: #4a4f57;
   --td-component-border: #3d4045;
   --td-text-color-primary: #ffffff;
   --td-text-color-secondary: rgba(255, 255, 255, 0.6);
@@ -286,7 +327,11 @@ const close = () => {
   }
 
   :deep(.t-radio-group--filled .t-radio-button) {
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  :deep(.t-radio-group--filled .t-radio-button:hover) {
+    color: #ffffff;
   }
 
   :deep(.t-radio-group--filled .t-radio-button.t-is-checked) {
@@ -359,7 +404,17 @@ const close = () => {
       color: #fff;
       font-size: 13px;
       font-weight: 500;
+      flex: none;
     }
+  }
+
+  .matting-row {
+    flex-wrap: wrap;
+  }
+
+  .matting-slider {
+    flex: 1;
+    min-width: 140px;
   }
 
   .subtitle-row {
@@ -427,6 +482,21 @@ const close = () => {
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+
+    .bg-btn {
+      flex: none;
+      height: 32px;
+      font-size: 12px;
+      color: #ffffff;
+      background: #3d4045;
+      border-color: #4a4f57;
+
+      &:hover {
+        color: #ffffff;
+        background: #4a4f57;
+        border-color: #565b64;
+      }
+    }
 
     .image-thumb {
       position: relative;

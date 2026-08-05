@@ -170,6 +170,7 @@ async function replaceVideoBackground(videoId, rawStyle, options = {}) {
       backgroundPath: stagedBackground,
       outputPath: silentOutputPath,
       face2faceRoot,
+      matting: options.matting,
       onProgress: (percent) => {
         options.progress?.({ percent, message: `正在处理人像 ${percent}%` })
       }
@@ -217,7 +218,7 @@ async function replaceVideoBackground(videoId, rawStyle, options = {}) {
   }
 }
 
-async function previewVideoBackground(videoId, rawStyle) {
+async function previewVideoBackground(videoId, rawStyle, options = {}) {
   const video = selectVideoByID(videoId)
   if (!video) throw new Error('找不到指定的视频作品')
   const background = resolveBackgroundInput(rawStyle)
@@ -254,7 +255,8 @@ async function previewVideoBackground(videoId, rawStyle) {
       sourcePath: clipPath,
       backgroundPath: stagedBackground,
       outputPath: silentPreviewPath,
-      face2faceRoot
+      face2faceRoot,
+      matting: options.matting
     })
     await extractFirstFrame(silentPreviewPath, previewOutputPath)
     return { previewPath: previewOutputPath }

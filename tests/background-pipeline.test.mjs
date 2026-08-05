@@ -107,11 +107,22 @@ test(
         backgroundPath: bg,
         outputPath: silent,
         face2faceRoot,
+        matting: { maxSide: 768, edgeMode: 'feather', edgeAmount: 3 },
         onProgress: (percent) => progress.push(percent)
       })
       assert.ok(fs.existsSync(silent), 'RVM should produce a silent video')
       assert.ok(progress.length > 0, 'RVM should report progress')
       assert.equal(progress.at(-1), 99)
+
+      const silentErode = path.join(directory, 'silent-erode.mp4')
+      await runRvmMatting({
+        sourcePath: source,
+        backgroundPath: bg,
+        outputPath: silentErode,
+        face2faceRoot,
+        matting: { maxSide: 512, edgeMode: 'erode', edgeAmount: 2 }
+      })
+      assert.ok(fs.existsSync(silentErode), 'RVM should accept erode edge mode')
 
       await mergeAudioAndH264(silent, source, output)
       const info = inspect(output)

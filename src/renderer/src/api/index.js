@@ -36,8 +36,8 @@ export function replaceVideoBackground(id, style, options = {}) {
   return window.electron.ipcRenderer.invoke('video/replace-background', id, style, options)
 }
 
-export function previewVideoBackground(id, style) {
-  return window.electron.ipcRenderer.invoke('video/preview-background', id, style)
+export function previewVideoBackground(id, style, options = {}) {
+  return window.electron.ipcRenderer.invoke('video/preview-background', id, style, options)
 }
 
 export function onVideoBackgroundProgress(callback) {
