@@ -69,8 +69,8 @@ export function saveContext(key, val) {
   return window.electron.ipcRenderer.invoke('context/save', key, val)
 }
 
-export function audition(voiceId, text) {
-  return window.electron.ipcRenderer.invoke('voice/audition', voiceId, text)
+export function audition(voiceId, text, speed = 1) {
+  return window.electron.ipcRenderer.invoke('voice/audition', voiceId, text, speed)
 }
 
 export function updateVoiceReferenceText(voiceId, text) {

@@ -66,6 +66,7 @@ const state = reactive({
     model: {},
     speaker: {},
     text: '',
+    speed: 1,
     modelList: [],
     uploaded: null,
     subtitle: {
@@ -168,6 +169,7 @@ const action = {
         ? `${videoDetail.name}${t('common.editView.revisionNameSuffix')}`
         : videoDetail.name
       state.select.text = videoDetail.text_content || ''
+      state.select.speed = Number(videoDetail.speed) || 1
       state.select.model.id = videoDetail.model_id
       state.sourceVoiceId = videoDetail.voice_id || ''
       if (videoDetail.audio_source === 'upload' && videoDetail.audio_path) {
@@ -244,6 +246,7 @@ const action = {
       model_id: select.model.id,
       name: video.name,
       text_content: select.text,
+      speed: Number(select.speed) || 1,
       subtitle_style: {
         enabled: Boolean((select.subtitle.enabled || select.subtitle.burnEnabled) && select.text?.trim()),
         burnEnabled: Boolean(select.subtitle.burnEnabled && select.text?.trim()),

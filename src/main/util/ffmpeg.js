@@ -65,6 +65,11 @@ export function extractAudio(videoPath, audioPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
       .noVideo()
+      // TTS 服务端 ASR 按 16kHz 单声道 s16le 切块发送，必须先把声道归一，
+      // 否则立体声音频会以交错采样被当作单声道识别，产生乱码文本
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioCodec('pcm_s16le')
       .save(audioPath)
       .on('end', () => {
         log.info('audio split done')
@@ -135,6 +140,21 @@ export function convertAudioToAsrPcm(inputPath, outputPath) {
       .audioFrequency(16000)
       .audioCodec('pcm_s16le')
       .format('s16le')
+      .save(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (error) => reject(error))
+  })
+}
+
+/**
+ * 使用 atempo 调整音频播放速度（支持 0.5 ~ 2.0）。
+ */
+export function adjustAudioSpeed(inputPath, outputPath, speed) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioFilters(`atempo=${speed}`)
+      .audioCodec('pcm_s16le')
       .save(outputPath)
       .on('end', () => resolve(outputPath))
       .on('error', (error) => reject(error))

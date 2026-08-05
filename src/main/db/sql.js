@@ -80,5 +80,11 @@ export default [
                  alter table video add subtitle_render_status text;
                  alter table video add subtitle_render_message text;
                 `
+    },
+    {
+        version: 10,
+        script: `
+                 alter table video add speed real default 1.0;
+                `
     }
 ]

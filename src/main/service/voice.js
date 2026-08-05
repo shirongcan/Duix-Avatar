@@ -1,5 +1,6 @@
 import { selectAll, insert, selectByID, updateReferenceText as updateReferenceTextDao } from '../dao/voice.js'
 import { preprocessAndTran, makeAudio as makeAudioApi } from '../api/tts.js'
+import { adjustAudioSpeed } from '../util/ffmpeg.js'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -11,6 +12,12 @@ import dayjs from 'dayjs'
 
 const MODEL_NAME = 'voice'
 const TTS_CONTAINER = process.env.HEYGEM_TTS_CONTAINER || 'duix-avatar-tts'
+
+export function normalizeSpeed(speed) {
+  const value = Number(speed)
+  if (!Number.isFinite(value) || value <= 0) return 1
+  return Math.min(2, Math.max(0.5, value))
+}
 
 function runDockerCat(containerPath, timeoutMilliseconds = 60000) {
   return new Promise((resolve, reject) => {
@@ -118,8 +125,8 @@ export async function train(path, lang = 'zh') {
   }
 }
 
-export function makeAudio4Video({voiceId, text}) {
-  return makeAudio({voiceId, text, targetDir: assetPath.ttsProduct})
+export function makeAudio4Video({voiceId, text, speed = 1}) {
+  return makeAudio({voiceId, text, speed, targetDir: assetPath.ttsProduct})
 }
 
 export function copyAudio4Video(filePath) {
@@ -131,9 +138,10 @@ export function copyAudio4Video(filePath) {
   return fileName
 }
 
-export async function makeAudio({voiceId, text, targetDir}) {
+export async function makeAudio({voiceId, text, targetDir, speed = 1}) {
   const uuid = crypto.randomUUID()
   const voice = selectByID(voiceId)
+  const speedValue = normalizeSpeed(speed)
 
   return makeAudioApi({
     speaker: uuid,
@@ -157,8 +165,18 @@ export async function makeAudio({voiceId, text, targetDir}) {
           recursive: true
         })
       }
-      fs.writeFileSync(path.join(targetDir, `${uuid}.wav`), res, 'binary')
-      return `${uuid}.wav`
+      const finalPath = path.join(targetDir, `${uuid}.wav`)
+      if (speedValue === 1) {
+        fs.writeFileSync(finalPath, res, 'binary')
+        return `${uuid}.wav`
+      }
+      // 服务端不支持语速参数，用 atempo 在本地调整播放速度
+      const originalPath = path.join(targetDir, `${uuid}.original.wav`)
+      fs.writeFileSync(originalPath, res, 'binary')
+      return adjustAudioSpeed(originalPath, finalPath, speedValue).then(() => {
+        fs.rmSync(originalPath, { force: true })
+        return `${uuid}.wav`
+      })
     })
     .catch((error) => {
       log.error('Error generating audio:', error)
@@ -170,12 +188,13 @@ export async function makeAudio({voiceId, text, targetDir}) {
  * 试听音频
  * @param {string} voiceId
  * @param {string} text
+ * @param {number} speed
  * @returns
  */
-export async function audition(voiceId, text) {
+export async function audition(voiceId, text, speed = 1) {
   const tmpDir = require('os').tmpdir()
   console.log("🚀 ~ audition ~ tmpDir:", tmpDir)
-  const audioPath = await makeAudio({ voiceId, text, targetDir: tmpDir })
+  const audioPath = await makeAudio({ voiceId, text, speed, targetDir: tmpDir })
   return path.join(tmpDir, audioPath)
 }
 

@@ -22,6 +22,12 @@
           </t-popup>
         </div>
       </div>
+      <!-- 语速 -->
+      <div class="speed">
+        <span class="label">{{ $t('common.editView.speed') }}</span>
+        <t-slider class="slider" :min="0.5" :max="2" :step="0.05" v-model="select.speed" />
+        <span class="value">{{ Number(select.speed || 1).toFixed(2) }}x</span>
+      </div>
       <!-- 试听 -->
       <t-button class="start" size="small" @click="action.textToAudio" :loading="state.textToAudioLoading">{{ $t('common.editView.listen') }}</t-button>
     </div>
@@ -50,6 +56,14 @@ const state = reactive({
   textToAudioLoading: false,
 })
 
+const takePreviewText = (text, limit = 3, maxChars = 150) => {
+  const segments = (text || '')
+    .split(/(?<=[。！？!?；;\n\r.])/)
+    .filter((segment) => segment.trim().length > 0)
+  const preview = segments.length > limit ? segments.slice(0, limit).join('') : text
+  return preview.length > maxChars ? preview.slice(0, maxChars) : preview
+}
+
 const action = {
   async textToAudio() {
     const { speaker, text } = select.value || {}
@@ -63,9 +77,11 @@ const action = {
     }
     state.textToAudioLoading = true
     try {
-      const auditionUrl = await audition(speaker.voice_id, text)
+      // 试听只生成前几段，避免整篇生成太慢
+      const previewText = takePreviewText(text)
+      const auditionUrl = await audition(speaker.voice_id, previewText, select.value.speed || 1)
 
-      const name = (speaker.name || '') + ' - ' + text.slice(0, 10)
+      const name = (speaker.name || '') + ' - ' + previewText.slice(0, 10)
 
       props.listener.listen({
         name,
@@ -147,6 +163,31 @@ const action = {
       height: 24px;
       border-radius: 2px;
       font-size: 12px;
+    }
+
+    .speed {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .label {
+        font-size: 12px;
+        color: #ffffff;
+        white-space: nowrap;
+      }
+
+      .slider {
+        width: 130px;
+        --td-slider-rail-color: #3d4042;
+      }
+
+      .value {
+        font-size: 12px;
+        color: #ffffff;
+        width: 42px;
+        text-align: right;
+        white-space: nowrap;
+      }
     }
 
     .speaker {

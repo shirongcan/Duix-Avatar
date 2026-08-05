@@ -201,6 +201,7 @@ function saveVideo({
   text_content,
   voice_id,
   audio_path,
+  speed = 1,
   subtitle_style
 }) {
   const sourceVideo = source_video_id ? selectVideoByID(source_video_id) : null
@@ -227,6 +228,7 @@ function saveVideo({
       text_content,
       voice_id,
       audio_path,
+      speed: Number(speed) > 0 ? Number(speed) : 1,
       subtitle_style: normalizeSubtitleStyle(subtitle_style),
       subtitle_timing: null
     })
@@ -238,6 +240,7 @@ function saveVideo({
     text_content,
     voice_id,
     audio_path,
+    speed: Number(speed) > 0 ? Number(speed) : 1,
     subtitle_style: normalizeSubtitleStyle(subtitle_style),
     subtitle_render_status: 'not_requested'
   })
@@ -292,7 +295,8 @@ export async function synthesisVideo(videoId) {
       // 调用tts接口生成音频
       audioPath = await makeAudio4Video({
         voiceId: voice.id,
-        text: video.text_content
+        text: video.text_content,
+        speed: video.speed || 1
       })
       log.debug('~ makeVideo ~ audioPath:', audioPath)
     }
